@@ -1,0 +1,10 @@
+{
+  "name": "webfacer",
+  "version": "1.0.0",
+  "description": "WebFacer — 可视化 CSS 图形化制作工具（纯原生 HTML/JS/CSS）",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node serve.mjs . 4173"
+  }
+}
