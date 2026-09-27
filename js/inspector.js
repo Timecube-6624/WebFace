@@ -128,6 +128,11 @@ export class Inspector {
       ] }),
       this._field("border-color", "描边色", "color", "prop"),
       this._field("border-radius", "圆角", "number", "prop", { unit: "px", min: 0, max: 1000, step: 1 }),
+      this._field("corner-shape", "圆角类型", "seg", "prop", {
+        def: "round",
+        options: [["round", "标准"], ["squircle", "平滑"]],
+        hint: "「平滑」= 苹果式连续圆角（corner-shape: squircle，需较新的 Chrome / Edge）",
+      }),
     ]});
 
     groups.push({ title: "间距", closed: false, fields: [
@@ -136,7 +141,7 @@ export class Inspector {
     ]});
 
     groups.push({ title: "效果", closed: false, fields: [
-      this._field("boxShadow", "阴影", "text", "prop", { ph: "0 4px 12px rgba(0,0,0,.2)" }),
+      this._field("box-shadow", "阴影", "text", "prop", { ph: "0 4px 12px rgba(0,0,0,.2)" }),
       this._field("opacity", "不透明度", "range", "prop", { min: 0, max: 1, step: 0.01 }),
       this._field("transform", "变换", "text", "prop", { ph: "rotate(8deg) scale(1.1)" }),
     ]});
@@ -299,12 +304,13 @@ export class Inspector {
     if (f.type === "seg") {
       const seg = document.createElement("div");
       seg.className = "seg";
+      const cur = (val == null || val === "") && f.opts.def ? f.opts.def : val;
       for (const [v, t] of f.opts.options) {
         const b = document.createElement("button");
         b.type = "button";
         b.textContent = t;
         b.dataset.v = v;
-        if (String(val) === String(v)) b.classList.add("on");
+        if (String(cur) === String(v)) b.classList.add("on");
         b.addEventListener("click", () => {
           store.pushHistory();
           this._set(el, f, v);
@@ -313,6 +319,12 @@ export class Inspector {
         seg.appendChild(b);
       }
       wrap.appendChild(seg);
+      if (f.opts.hint) {
+        const hint = document.createElement("div");
+        hint.className = "field-hint";
+        hint.textContent = f.opts.hint;
+        wrap.appendChild(hint);
+      }
       return wrap;
     }
 

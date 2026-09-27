@@ -181,17 +181,22 @@ export class Canvas {
   }
 
   _applyStyle(node, el) {
-    node.style.display = store.isHidden(el.id) ? "none" : "";
+    // Fully rebuild the inline style so changing a value to 0 / none / transparent
+    // actually takes effect (previously such values were skipped and the old
+    // inline value stuck, e.g. border-radius could not be reduced to 0).
+    node.style.cssText = "";
     for (const [k, v] of Object.entries(el.props || {})) {
-      if (!v) continue;
-      if (v === "0px" || v === "none" || v === "transparent" || v === "") continue;
-      node.style.setProperty(k, String(v));
+      if (v == null || k === "width" || k === "height") continue;
+      const val = String(v).trim();
+      if (!val) continue;
+      try { node.style.setProperty(k, val); } catch (e) { /* ignore invalid */ }
     }
     // geometry last so explicit canvas size wins over props like width:auto/100%
     node.style.left = el.x + "px";
     node.style.top = el.y + "px";
     node.style.width = el.width + "px";
     node.style.height = el.height + "px";
+    if (store.isHidden(el.id)) node.style.display = "none";
     // content type-dependent apply
     if (el.type === "image") node.src = el.content || "";
     if (el.type === "input") node.placeholder = el.content || "";

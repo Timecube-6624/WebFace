@@ -7,7 +7,7 @@ const WHITELIST = new Set([
   "justify-content", "gap", "font-family", "font-size", "font-weight", "line-height",
   "letter-spacing", "text-align", "text-decoration", "color", "background-color",
   "background-image", "background-size", "background-position", "border-width",
-  "border-style", "border-color", "border-radius", "box-shadow", "opacity",
+  "border-style", "border-color", "border-radius", "corner-shape", "box-shadow", "opacity",
   "transform", "transition", "object-fit", "overflow", "cursor", "margin", "padding",
 ]);
 

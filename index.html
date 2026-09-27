@@ -49,6 +49,33 @@
       <!-- Canvas area -->
       <main class="canvas-area" id="canvas-area">
         <div class="canvas-stage" id="canvas-stage" tabindex="0"></div>
+        <div class="start-panel" id="start-panel" hidden>
+          <h2>构思 · 创建项目</h2>
+          <label class="field">
+            <span>项目名称</span>
+            <input type="text" id="new-name" value="我的设计" spellcheck="false">
+          </label>
+          <label class="field">
+            <span>画布尺寸</span>
+            <div class="field-row">
+              <input type="number" id="new-width" value="1200" min="200" max="8000" step="10" class="num"> ×
+              <input type="number" id="new-height" value="800" min="200" max="8000" step="10" class="num">
+            </div>
+          </label>
+          <div class="field folder-field">
+            <span>导出文件夹 <em>(可选)</em></span>
+            <div class="field-row">
+              <input type="text" id="new-folder" class="ctl" readonly placeholder="未选择（导出时再选）" title="导出的目标文件夹">
+              <button class="btn btn-outlined btn-sm" id="new-folder-pick" title="选择导出文件夹">选择文件夹…</button>
+              <button class="btn btn-ghost btn-sm" id="new-folder-clear" title="清除" hidden>清除</button>
+            </div>
+          </div>
+          <div class="sp-actions">
+            <button class="btn btn-primary" id="new-create">创建项目</button>
+            <button class="btn btn-tonal" id="new-demo">载入示例内容</button>
+            <button class="btn btn-ghost" id="new-cancel">取消</button>
+          </div>
+        </div>
       </main>
 
       <!-- Right inspector -->
@@ -95,37 +122,6 @@
         <pre class="code-view"><code id="cp-code"></code></pre>
       </div>
     </section>
-
-    <!-- ===== Modals ===== -->
-    <div class="modal-backdrop" id="modal-new" hidden>
-      <div class="modal">
-        <h2>新建项目</h2>
-        <label class="field">
-          <span>项目名称</span>
-          <input type="text" id="new-name" value="我的设计" spellcheck="false">
-        </label>
-        <label class="field">
-          <span>画布尺寸</span>
-          <div class="field-row">
-            <input type="number" id="new-width" value="1200" min="200" max="8000" step="10" class="num"> ×
-            <input type="number" id="new-height" value="800" min="200" max="8000" step="10" class="num">
-          </div>
-        </label>
-        <div class="field folder-field">
-          <span>导出文件夹 <em>(可选)</em></span>
-          <div class="field-row">
-            <input type="text" id="new-folder" class="ctl" readonly placeholder="未选择（导出时再选）" title="导出的目标文件夹">
-            <button class="btn btn-ghost btn-sm" id="new-folder-pick" title="选择导出文件夹">选择文件夹…</button>
-            <button class="btn btn-ghost btn-sm" id="new-folder-clear" title="清除，导出时再选" hidden>清除</button>
-          </div>
-          <p class="hint">不选也可以，创建后可随时在「导出 ▾」里选择。<br>文件夹选择需 Chrome/Edge 并以 <code>http/https</code> 或 <code>localhost</code> 打开；否则导出时将以下载文件方式保存。</p>
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" id="new-cancel">取消</button>
-          <button class="btn btn-primary" id="new-create">创建</button>
-        </div>
-      </div>
-    </div>
 
     <!-- ===== Toast ===== -->
     <div class="toast" id="toast"></div>

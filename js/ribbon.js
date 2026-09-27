@@ -6,6 +6,10 @@ export const MODES = [
   {
     id: "ideate", label: "构思",
     groups: [
+      { label: "项目", tools: [
+        { id: "project-new", label: "新建项目", icon: "◧" },
+        { id: "load-demo", label: "示例内容", icon: "★" },
+      ]},
       { label: "文本内容", tools: [
         { type: "add", component: "heading", label: "标题", icon: "H" },
         { type: "add", component: "paragraph", label: "正文", icon: "¶" },

@@ -783,7 +783,7 @@ const WHITELIST = new Set([
   "justify-content", "gap", "font-family", "font-size", "font-weight", "line-height",
   "letter-spacing", "text-align", "text-decoration", "color", "background-color",
   "background-image", "background-size", "background-position", "border-width",
-  "border-style", "border-color", "border-radius", "box-shadow", "opacity",
+  "border-style", "border-color", "border-radius", "corner-shape", "box-shadow", "opacity",
   "transform", "transition", "object-fit", "overflow", "cursor", "margin", "padding",
 ]);
 
@@ -1203,17 +1203,22 @@ class Canvas {
   }
 
   _applyStyle(node, el) {
-    node.style.display = store.isHidden(el.id) ? "none" : "";
+    // Fully rebuild the inline style so changing a value to 0 / none / transparent
+    // actually takes effect (previously such values were skipped and the old
+    // inline value stuck, e.g. border-radius could not be reduced to 0).
+    node.style.cssText = "";
     for (const [k, v] of Object.entries(el.props || {})) {
-      if (!v) continue;
-      if (v === "0px" || v === "none" || v === "transparent" || v === "") continue;
-      node.style.setProperty(k, String(v));
+      if (v == null || k === "width" || k === "height") continue;
+      const val = String(v).trim();
+      if (!val) continue;
+      try { node.style.setProperty(k, val); } catch (e) { /* ignore invalid */ }
     }
     // geometry last so explicit canvas size wins over props like width:auto/100%
     node.style.left = el.x + "px";
     node.style.top = el.y + "px";
     node.style.width = el.width + "px";
     node.style.height = el.height + "px";
+    if (store.isHidden(el.id)) node.style.display = "none";
     // content type-dependent apply
     if (el.type === "image") node.src = el.content || "";
     if (el.type === "input") node.placeholder = el.content || "";
@@ -1775,6 +1780,11 @@ class Inspector {
       ] }),
       this._field("border-color", "描边色", "color", "prop"),
       this._field("border-radius", "圆角", "number", "prop", { unit: "px", min: 0, max: 1000, step: 1 }),
+      this._field("corner-shape", "圆角类型", "seg", "prop", {
+        def: "round",
+        options: [["round", "标准"], ["squircle", "平滑"]],
+        hint: "「平滑」= 苹果式连续圆角（corner-shape: squircle，需较新的 Chrome / Edge）",
+      }),
     ]});
 
     groups.push({ title: "间距", closed: false, fields: [
@@ -1783,7 +1793,7 @@ class Inspector {
     ]});
 
     groups.push({ title: "效果", closed: false, fields: [
-      this._field("boxShadow", "阴影", "text", "prop", { ph: "0 4px 12px rgba(0,0,0,.2)" }),
+      this._field("box-shadow", "阴影", "text", "prop", { ph: "0 4px 12px rgba(0,0,0,.2)" }),
       this._field("opacity", "不透明度", "range", "prop", { min: 0, max: 1, step: 0.01 }),
       this._field("transform", "变换", "text", "prop", { ph: "rotate(8deg) scale(1.1)" }),
     ]});
@@ -1946,12 +1956,13 @@ class Inspector {
     if (f.type === "seg") {
       const seg = document.createElement("div");
       seg.className = "seg";
+      const cur = (val == null || val === "") && f.opts.def ? f.opts.def : val;
       for (const [v, t] of f.opts.options) {
         const b = document.createElement("button");
         b.type = "button";
         b.textContent = t;
         b.dataset.v = v;
-        if (String(val) === String(v)) b.classList.add("on");
+        if (String(cur) === String(v)) b.classList.add("on");
         b.addEventListener("click", () => {
           store.pushHistory();
           this._set(el, f, v);
@@ -1960,6 +1971,12 @@ class Inspector {
         seg.appendChild(b);
       }
       wrap.appendChild(seg);
+      if (f.opts.hint) {
+        const hint = document.createElement("div");
+        hint.className = "field-hint";
+        hint.textContent = f.opts.hint;
+        wrap.appendChild(hint);
+      }
       return wrap;
     }
 
@@ -2272,6 +2289,10 @@ const MODES = [
   {
     id: "ideate", label: "构思",
     groups: [
+      { label: "项目", tools: [
+        { id: "project-new", label: "新建项目", icon: "◧" },
+        { id: "load-demo", label: "示例内容", icon: "★" },
+      ]},
       { label: "文本内容", tools: [
         { type: "add", component: "heading", label: "标题", icon: "H" },
         { type: "add", component: "paragraph", label: "正文", icon: "¶" },
@@ -2902,10 +2923,10 @@ const refs = {
   leftTabs: $("#left-tabs"), leftBody: $("#left-body"),
   inspector: $("#inspector"),
   codePreview: $("#code-preview"),
-  modalNew: $("#modal-new"),
+  modalNew: $("#start-panel"),
   newName: $("#new-name"), newWidth: $("#new-width"), newHeight: $("#new-height"),
   newFolder: $("#new-folder"), newFolderPick: $("#new-folder-pick"), newFolderClear: $("#new-folder-clear"),
-  newCancel: $("#new-cancel"), newCreate: $("#new-create"),
+  newCancel: $("#new-cancel"), newCreate: $("#new-create"), newDemo: $("#new-demo"),
   exportTarget: $("#export-target"),
   toast: $("#toast"),
 };
@@ -2951,20 +2972,35 @@ function ensureInit() {
     store.state.name = saved.name;
     $("title").textContent = saved.name + " · WebFacer";
     refs.projectName.value = saved.name;
-    return;
+    return false;
   }
-  const demo = seedDemo();
-  store.project.name = demo.name;
-  store.project.elements = demo.elements;
-  refs.projectName.value = demo.name;
-  refs.projectName.placeholder = demo.name;
-  store._emit({ type: "structure" });
+  // Fresh start: creation is the first step of the 构思 mode.
+  store.project.name = "未命名项目";
+  refs.projectName.value = "";
+  return true;
 }
 
-ensureInit();
+const needCreate = ensureInit();
 canvas.layout();
 canvas.requestFocus();
 setHeaderHeight();
+
+function loadDemo() {
+  const demo = seedDemo();
+  store.project.name = demo.name;
+  store.project.elements = demo.elements;
+  store.project.canvasBg = "#ffffff";
+  store.project.showGrid = false;
+  refs.projectName.value = demo.name;
+  $("title").textContent = demo.name + " · WebFacer";
+  store._emit({ type: "structure" });
+  canvas.layout();
+}
+
+// surface unexpected script errors instead of failing silently
+window.addEventListener("error", (e) => {
+  try { toast("脚本错误：" + (e.message || e), false); } catch (_) { /* ignore */ }
+});
 
 // ---------- helpers ----------
 function toast(text, ok = true) {
@@ -3109,28 +3145,33 @@ refs.exportTarget.addEventListener("click", () => exporter.toggleMenu(refs.btnEx
 window.addEventListener("webfacer:exportfolder", refreshExportUI);
 refreshExportUI();
 
-// ---------- new project modal ----------
+// ---------- project creation (inside the 构思 step) ----------
 function openNewModal() {
   refs.modalNew.hidden = false;
-  refs.newName.focus();
-  refs.newName.select();
+  if (ribbon) ribbon.setMode("ideate");
+  setTimeout(() => { refs.newName.focus(); refs.newName.select(); }, 0);
 }
 function createProject() {
-  const name = refs.newName.value.trim() || "未命名项目";
-  const width = clamp(parseInt(refs.newWidth.value, 10) || 1200, 200, 8000);
-  const height = clamp(parseInt(refs.newHeight.value, 10) || 800, 200, 8000);
-  store.newProject({ name, width, height });
-  refs.projectName.value = name;
-  $("title").textContent = name + " · WebFacer";
-  refs.modalNew.hidden = true;
-  canvas.layout();
-  canvas.requestFocus();
-  toast(`已创建「${name}」`);
-  refreshExportUI();
+  try {
+    const name = refs.newName.value.trim() || "未命名项目";
+    const width = clamp(parseInt(refs.newWidth.value, 10) || 1200, 200, 8000);
+    const height = clamp(parseInt(refs.newHeight.value, 10) || 800, 200, 8000);
+    store.newProject({ name, width, height });
+    refs.projectName.value = name;
+    $("title").textContent = name + " · WebFacer";
+    refs.modalNew.hidden = true;
+    canvas.layout();
+    canvas.requestFocus();
+    toast(`已创建「${name}」`);
+    refreshExportUI();
+  } catch (err) {
+    toast("创建失败：" + (err && err.message ? err.message : err), false);
+    console.error(err);
+  }
 }
 refs.newCancel.addEventListener("click", () => { refs.modalNew.hidden = true; });
-refs.modalNew.addEventListener("click", (ev) => { if (ev.target === refs.modalNew) refs.modalNew.hidden = true; });
 refs.newCreate.addEventListener("click", createProject);
+if (refs.newDemo) refs.newDemo.addEventListener("click", () => { loadDemo(); refs.modalNew.hidden = true; toast("已载入示例内容"); });
 
 // ---------- ribbon tool dispatch ----------
 // Each entrance preset applies ONLY its own effect (one track), no extras.
@@ -3163,6 +3204,9 @@ function onRibbonTool(tool) {
   const id = store.state.selectedId;
   switch (tool.id) {
     // page
+    // page
+    case "project-new": openNewModal(); break;
+    case "load-demo": loadDemo(); toast("已载入示例内容"); break;
     case "new": openNewModal(); break;
     case "save": doSave(); break;
     case "rename": focusName(); break;
@@ -3277,6 +3321,9 @@ window.addEventListener("keydown", (ev) => {
 
 // re-render selection frame initial if a demo was seeded
 canvas.updateSelectionFrame();
+
+// fresh start: the 构思 step opens the project-creation panel
+if (needCreate) openNewModal();
 
 
 })();

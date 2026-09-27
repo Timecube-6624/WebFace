@@ -22,10 +22,10 @@ const refs = {
   leftTabs: $("#left-tabs"), leftBody: $("#left-body"),
   inspector: $("#inspector"),
   codePreview: $("#code-preview"),
-  modalNew: $("#modal-new"),
+  modalNew: $("#start-panel"),
   newName: $("#new-name"), newWidth: $("#new-width"), newHeight: $("#new-height"),
   newFolder: $("#new-folder"), newFolderPick: $("#new-folder-pick"), newFolderClear: $("#new-folder-clear"),
-  newCancel: $("#new-cancel"), newCreate: $("#new-create"),
+  newCancel: $("#new-cancel"), newCreate: $("#new-create"), newDemo: $("#new-demo"),
   exportTarget: $("#export-target"),
   toast: $("#toast"),
 };
@@ -71,20 +71,35 @@ function ensureInit() {
     store.state.name = saved.name;
     $("title").textContent = saved.name + " · WebFacer";
     refs.projectName.value = saved.name;
-    return;
+    return false;
   }
-  const demo = seedDemo();
-  store.project.name = demo.name;
-  store.project.elements = demo.elements;
-  refs.projectName.value = demo.name;
-  refs.projectName.placeholder = demo.name;
-  store._emit({ type: "structure" });
+  // Fresh start: creation is the first step of the 构思 mode.
+  store.project.name = "未命名项目";
+  refs.projectName.value = "";
+  return true;
 }
 
-ensureInit();
+const needCreate = ensureInit();
 canvas.layout();
 canvas.requestFocus();
 setHeaderHeight();
+
+function loadDemo() {
+  const demo = seedDemo();
+  store.project.name = demo.name;
+  store.project.elements = demo.elements;
+  store.project.canvasBg = "#ffffff";
+  store.project.showGrid = false;
+  refs.projectName.value = demo.name;
+  $("title").textContent = demo.name + " · WebFacer";
+  store._emit({ type: "structure" });
+  canvas.layout();
+}
+
+// surface unexpected script errors instead of failing silently
+window.addEventListener("error", (e) => {
+  try { toast("脚本错误：" + (e.message || e), false); } catch (_) { /* ignore */ }
+});
 
 // ---------- helpers ----------
 function toast(text, ok = true) {
@@ -229,28 +244,33 @@ refs.exportTarget.addEventListener("click", () => exporter.toggleMenu(refs.btnEx
 window.addEventListener("webfacer:exportfolder", refreshExportUI);
 refreshExportUI();
 
-// ---------- new project modal ----------
+// ---------- project creation (inside the 构思 step) ----------
 function openNewModal() {
   refs.modalNew.hidden = false;
-  refs.newName.focus();
-  refs.newName.select();
+  if (ribbon) ribbon.setMode("ideate");
+  setTimeout(() => { refs.newName.focus(); refs.newName.select(); }, 0);
 }
 function createProject() {
-  const name = refs.newName.value.trim() || "未命名项目";
-  const width = clamp(parseInt(refs.newWidth.value, 10) || 1200, 200, 8000);
-  const height = clamp(parseInt(refs.newHeight.value, 10) || 800, 200, 8000);
-  store.newProject({ name, width, height });
-  refs.projectName.value = name;
-  $("title").textContent = name + " · WebFacer";
-  refs.modalNew.hidden = true;
-  canvas.layout();
-  canvas.requestFocus();
-  toast(`已创建「${name}」`);
-  refreshExportUI();
+  try {
+    const name = refs.newName.value.trim() || "未命名项目";
+    const width = clamp(parseInt(refs.newWidth.value, 10) || 1200, 200, 8000);
+    const height = clamp(parseInt(refs.newHeight.value, 10) || 800, 200, 8000);
+    store.newProject({ name, width, height });
+    refs.projectName.value = name;
+    $("title").textContent = name + " · WebFacer";
+    refs.modalNew.hidden = true;
+    canvas.layout();
+    canvas.requestFocus();
+    toast(`已创建「${name}」`);
+    refreshExportUI();
+  } catch (err) {
+    toast("创建失败：" + (err && err.message ? err.message : err), false);
+    console.error(err);
+  }
 }
 refs.newCancel.addEventListener("click", () => { refs.modalNew.hidden = true; });
-refs.modalNew.addEventListener("click", (ev) => { if (ev.target === refs.modalNew) refs.modalNew.hidden = true; });
 refs.newCreate.addEventListener("click", createProject);
+if (refs.newDemo) refs.newDemo.addEventListener("click", () => { loadDemo(); refs.modalNew.hidden = true; toast("已载入示例内容"); });
 
 // ---------- ribbon tool dispatch ----------
 // Each entrance preset applies ONLY its own effect (one track), no extras.
@@ -283,6 +303,9 @@ function onRibbonTool(tool) {
   const id = store.state.selectedId;
   switch (tool.id) {
     // page
+    // page
+    case "project-new": openNewModal(); break;
+    case "load-demo": loadDemo(); toast("已载入示例内容"); break;
     case "new": openNewModal(); break;
     case "save": doSave(); break;
     case "rename": focusName(); break;
@@ -397,3 +420,6 @@ window.addEventListener("keydown", (ev) => {
 
 // re-render selection frame initial if a demo was seeded
 canvas.updateSelectionFrame();
+
+// fresh start: the 构思 step opens the project-creation panel
+if (needCreate) openNewModal();
