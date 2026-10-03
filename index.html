@@ -98,9 +98,14 @@
       </header>
       <div class="lp-body">
         <div class="lp-logic" id="lp-logic"></div>
+        <!-- middle column: clip / keyframe editor. Draggable width; hidden while
+             nothing is being edited, so 点击逻辑 and the timeline keep the space. -->
+        <div class="tl-detail" id="tl-detail" hidden>
+          <div class="tl-detail-resize" id="tl-detail-resize" title="拖动调整宽度"></div>
+          <div class="tl-detail-body" id="tl-detail-body"></div>
+        </div>
         <div class="lp-timeline" id="lp-timeline">
           <div class="tl-master" id="tl-master"></div>
-          <div class="tl-detail" id="tl-detail"></div>
         </div>
       </div>
     </section>

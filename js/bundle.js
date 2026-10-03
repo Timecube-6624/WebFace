@@ -2928,10 +2928,16 @@ class AnimationPanel {
     this.panel = panelEl;
     this.logicEl = logicEl;
     this.masterEl = masterEl;
+    this.detailEl = detailEl;   // middle pane of the panel: clip / keyframe editor
+    // the pane's innerHTML is rebuilt on every render, so the content lives in
+    // .tl-detail-body (the resize handle next to it survives), with a fallback for
+    // documents that do not have that wrapper.
+    this.detailBody = (detailEl && detailEl.querySelector && detailEl.querySelector(".tl-detail-body")) || detailEl;
     this.canvas = canvas;
     this.activeTarget = null;
     this.activeAnim = null;
     this.selKey = null; // { id, clipId, track, index }
+    this.detailOpen = false; // is the left editor pane expanded?
     this.expanded = new Set();
     this.visible = false;
     this._bindStore();
@@ -2939,20 +2945,37 @@ class AnimationPanel {
   }
 
   _bindResize() {
+    // height of the whole panel
     const handle = this.panel.querySelector("#lp-resize");
-    if (!handle) return;
-    try { const h = +localStorage.getItem("wf.lp.h"); if (h > 140) this.panel.style.height = h + "px"; } catch (e) {}
-    handle.addEventListener("pointerdown", (ev) => {
-      ev.preventDefault();
-      const startY = ev.clientY, startH = this.panel.getBoundingClientRect().height;
-      const maxH = window.innerHeight * 0.72;
-      const move = (e2) => this.panel.style.height = Math.min(maxH, Math.max(150, startH + (startY - e2.clientY))) + "px";
-      const up = () => {
-        window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
-        try { localStorage.setItem("wf.lp.h", String(this.panel.getBoundingClientRect().height)); } catch (e) {}
-      };
-      window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
-    });
+    if (handle) {
+      try { const h = +localStorage.getItem("wf.lp.h"); if (h > 140) this.panel.style.height = h + "px"; } catch (e) {}
+      handle.addEventListener("pointerdown", (ev) => {
+        ev.preventDefault();
+        const startY = ev.clientY, startH = this.panel.getBoundingClientRect().height;
+        const maxH = window.innerHeight * 0.72;
+        const move = (e2) => this.panel.style.height = Math.min(maxH, Math.max(150, startH + (startY - e2.clientY))) + "px";
+        const up = () => {
+          window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+          try { localStorage.setItem("wf.lp.h", String(this.panel.getBoundingClientRect().height)); } catch (e) {}
+        };
+        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+      });
+    }
+    // width of the middle editor pane
+    const wHandle = this.panel.querySelector("#tl-detail-resize");
+    if (wHandle && this.detailEl) {
+      try { const w = +localStorage.getItem("wf.tl.dw"); if (w >= 160) this.detailEl.style.flexBasis = w + "px"; } catch (e) {}
+      wHandle.addEventListener("pointerdown", (ev) => {
+        ev.preventDefault();
+        const startX = ev.clientX, startW = this.detailEl.getBoundingClientRect().width || 226;
+        const move = (e2) => this.detailEl.style.flexBasis = Math.min(560, Math.max(170, startW + (e2.clientX - startX))) + "px";
+        const up = () => {
+          window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+          try { localStorage.setItem("wf.tl.dw", String(Math.round(this.detailEl.getBoundingClientRect().width))); } catch (e) {}
+        };
+        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+      });
+    }
   }
 
   _bindStore() {
@@ -2969,14 +2992,29 @@ class AnimationPanel {
   setActive(id) {
     this.activeTarget = id; this.activeAnim = this._firstClipId(id);
     if (id) this.expanded.add(id);
+    this.detailOpen = !!id;
     store.select(id); this.selKey = null; this.render();
   }
-  setTarget(id) { this.activeTarget = id; this.activeAnim = this._firstClipId(id); if (id) this.expanded.add(id); this.selKey = null; this.render(); }
+  // Called by app.js on EVERY "selection" change — including the ones this panel
+  // triggers itself (store.select inside _activateClip/_addKfAt). Resetting here
+  // would throw away the clip/keyframe the user just clicked, so while the target
+  // is unchanged we keep what is being edited (that is why the 2nd/3rd track of an
+  // element could never open the same 片断 panel as the first one).
+  setTarget(id) {
+    if (id && id === this.activeTarget && store.animsOf(id).some(a => a.id === this.activeAnim)) {
+      this.expanded.add(id);
+      return;
+    }
+    this.activeTarget = id; this.activeAnim = this._firstClipId(id);
+    if (id) this.expanded.add(id);
+    this.selKey = null; this.detailOpen = false;
+    this.render();
+  }
   selectClip(id, clipId) { this.activeTarget = id; this.activeAnim = clipId; this.expanded.add(id); store.select(id); this.selKey = null; this.render(); }
   _firstClipId(id) { const a = store.animsOf(id); return a.length ? a[0].id : null; }
   toggleExpand(id) { if (this.expanded.has(id)) this.expanded.delete(id); else this.expanded.add(id); this.render(); }
 
-  render() { if (!this.visible) return; this.renderLogic(); this.renderTimeline(); }
+  render() { if (!this.visible) return; this.renderLogic(); this.renderTimeline(); this.renderDetail(); }
 
   // ---------------- logic graph ----------------
   renderLogic() {
@@ -3019,7 +3057,7 @@ class AnimationPanel {
   renderTimeline() {
     const total = timelineEnd();
     const w = Math.max(400, (total / 1000) * TIME_SCALE);
-    let h = `<div class="tl-ctrl"><button class="btn btn-outlined btn-sm" id="tl-playall" title="按主时间轴播放所有元素的所有片断">▶ 播放全部</button><span class="tl-ctrl-hint">点击元素 ▸ 展开 · ＋新增片断 · 拖动轨道条形改片断时间 · 点击条形加关键帧</span></div>`;
+    let h = `<div class="tl-ctrl"><button class="btn btn-outlined btn-sm" id="tl-playall" title="按主时间轴播放所有元素的所有片断">▶ 播放全部</button><span class="tl-ctrl-hint">点击元素 ▸ 展开 · 拖动条形改片断时间 · 点击条形加关键帧 · 片断/关键帧面板在中间栏</span></div>`;
     h += `<div class="tl-inner" style="width:${110 + w}px">`;
     // ruler
     h += `<div class="tl-row tl-ruler-row">`;
@@ -3070,7 +3108,6 @@ class AnimationPanel {
           } else {
             tracks.forEach((track, ti) => { s += this._trackRow(e, a, track, ti, total, w); });
           }
-          if (e.id === this.activeTarget && a.id === this.activeAnim) s += this._clipEditor(e, a, total, w);
           s += `</div>`;
         }
       }
@@ -3079,51 +3116,106 @@ class AnimationPanel {
     return s;
   }
 
-  _clipEditor(e, a, total, w) {
-    return `<div class="tl-row tl-cliped" style="width:${110 + w}px"><div class="tl-cliped-box">
-      <span class="tl-kfed-title">片断</span>
-      <label class="lp-label">开始 <input type="number" id="tl-start" min="0" max="60000" step="1" value="${+(a.start || 0)}"> ms</label>
-      <label class="lp-label">时长 <input type="number" id="tl-dur" min="20" max="60000" step="1" value="${+(a.duration || 600)}"> ms</label>
-      <button class="btn btn-outlined btn-sm" id="tl-playclip">▶ 播放这一段</button>
-      <button class="btn btn-ghost btn-sm" id="tl-delclip">删除该片断</button>
-    </div></div>`;
-  }
-
   _trackRow(e, a, track, ti, total, w) {
     const selClip = e.id === this.activeTarget && a.id === this.activeAnim;
+    const selTrack = !!(this.selKey && this.selKey.id === e.id && this.selKey.clipId === a.id && this.selKey.track === ti);
     const x = ((a.start || 0) / total) * 100;
     const wd = Math.max(2, Math.min(100, ((a.duration || 600) / total) * 100));
     const t0 = +(a.start || 0), t1 = t0 + (+(a.duration) || 600);
-    let s = `<div class="tl-row tl-track-row">`;
+    let s = `<div class="tl-row tl-track-row${selTrack ? " on" : ""}">`;
     s += `<div class="tl-lbl" style="width:110px;padding-left:36px">${track.prop}<button class="tl-del-track" data-id="${e.id}" data-clip="${a.id}" data-track="${ti}" title="删除该轨道">×</button></div>`;
     s += `<div class="tl-time" style="width:${w}px"><div class="tl-bar${selClip ? " sel" : ""}" data-id="${e.id}" data-clip="${a.id}" data-track="${ti}" style="left:${x}%;width:${wd}%" title="${track.prop}：${t0}~${t1}ms（拖动条形改片断时间 · 点击条形加关键帧）">`;
     s += `<span class="tl-bar-name">${track.prop}</span>`;
     // keyframe t is clip-relative (0..1) → position inside the bar, i.e. inside [start, start+duration]
     (track.keyframes || []).forEach((k, ki) => {
-      const sel = this.selKey && this.selKey.id === e.id && this.selKey.clipId === a.id && this.selKey.track === ti && this.selKey.index === ki;
+      const sel = selTrack && this.selKey.index === ki;
       s += `<span class="tl-kf${sel ? " on" : ""}" data-id="${e.id}" data-clip="${a.id}" data-track="${ti}" data-kf="${ki}" style="left:${((k.t || 0) * 100).toFixed(3)}%" title="${k.value}">◆</span>`;
     });
     s += `</div></div>`;
     s += `</div>`;
-    // selected keyframe inline editor
-    if (this.selKey && this.selKey.id === e.id && this.selKey.clipId === a.id && this.selKey.track === ti) {
-      const kf = track.keyframes[this.selKey.index];
-      if (kf) s += this._kfEditor(e, a, track, ti, kf, total, w);
-    }
     return s;
   }
 
-  _kfEditor(e, a, track, ti, kf, total, w) {
-    return `<div class="tl-row tl-kfed" style="width:${w + 110}px">
-      <div class="tl-kfed-box">
-        <span class="tl-kfed-title">关键帧：${track.prop}</span>
-        <label class="lp-label">值 <input type="text" id="tl-value" value="${kf.value}"></label>
-        <label class="lp-label">时间 <input type="number" id="tl-t" min="0" max="1" step="0.001" value="${+(kf.t || 0).toFixed(3)}"></label>
-        <button class="btn btn-ghost btn-sm" id="tl-addkf2">＋关键帧</button>
-        <button class="btn btn-ghost btn-sm" id="tl-delkf">删除关键帧</button>
-        <div class="tl-ease-label">缓动曲线（该关键帧→下一关键帧）</div>
-        <div id="tl-ease" class="tl-ease"></div>
-      </div></div>`;
+  // ---------------- left editor pane (clip + keyframe) ----------------
+  // The editors used to be rendered as extra rows INSIDE the timeline, which pushed
+  // the tracks around; they now live in the pane on the left of the timeline and the
+  // matching track/bar is highlighted instead (see .tl-bar.sel / .tl-track-row.on).
+  renderDetail() {
+    const host = this.detailBody || this.detailEl;
+    if (!host || !this.detailEl) return;
+    const el = this.activeTarget ? store.getElement(this.activeTarget) : null;
+    const clip = el ? store.getAnim(el.id, this.activeAnim) : null;
+    const sel = this._curSelKf();
+    let h = "";
+    if (this.detailOpen && el && clip) {
+      h += `<div class="tld-block">
+        <div class="tld-head"><span>片断</span><button class="tld-close" id="tld-close" title="收起面板">×</button></div>
+        <label class="lp-label">开始 <input type="number" id="tl-start" min="0" max="60000" step="1" value="${+(clip.start || 0)}"> ms</label>
+        <label class="lp-label">时长 <input type="number" id="tl-dur" min="20" max="60000" step="1" value="${+(clip.duration || 600)}"> ms</label>
+        <div class="tld-actions">
+          <button class="btn btn-outlined btn-sm" id="tl-playclip">▶ 播放这一段</button>
+          <button class="btn btn-ghost btn-sm" id="tl-delclip">删除片断</button>
+        </div>
+      </div>`;
+      if (sel) {
+        h += `<div class="tld-block">
+          <div class="tld-head"><span>关键帧 · ${sel.track.prop}</span></div>
+          <label class="lp-label">值 <input type="text" id="tl-value" value="${sel.kf.value}"></label>
+          <label class="lp-label">时间 <input type="number" id="tl-t" min="0" max="1" step="0.001" value="${+(sel.kf.t || 0).toFixed(3)}"></label>
+          <div class="tld-actions">
+            <button class="btn btn-ghost btn-sm" id="tl-addkf2">＋关键帧</button>
+            <button class="btn btn-ghost btn-sm" id="tl-delkf">删除关键帧</button>
+          </div>
+          <div class="tl-ease-label">缓动曲线（该关键帧→下一关键帧）</div>
+          <div id="tl-ease" class="tl-ease"></div>
+        </div>`;
+      } else {
+        h += `<div class="tld-hint">点时间轴上任意一条轨道里的 ◆ 关键帧，可以改它的值、时间和缓动曲线。</div>`;
+      }
+    }
+    this.detailEl.hidden = !h;
+    host.innerHTML = h;
+    this._bindDetail();
+  }
+
+  _bindDetail() {
+    const d = this.detailBody || this.detailEl;
+    if (!d) return;
+    const close = $("#tld-close", d);
+    if (close) close.addEventListener("click", () => { this.detailOpen = false; this.renderDetail(); });
+    const sIn = $("#tl-start", d);
+    if (sIn) sIn.addEventListener("change", () => {
+      const a = store.getAnim(this.activeTarget, this.activeAnim); if (!a) return;
+      a.start = Math.max(0, +sIn.value || 0); store._emit({ type: "update", id: this.activeTarget }); this.render();
+    });
+    const dIn = $("#tl-dur", d);
+    if (dIn) dIn.addEventListener("change", () => {
+      const a = store.getAnim(this.activeTarget, this.activeAnim); if (!a) return;
+      a.duration = Math.max(20, +dIn.value || 600); store._emit({ type: "update", id: this.activeTarget }); this.render();
+    });
+    const pClip = $("#tl-playclip", d);
+    if (pClip) pClip.addEventListener("click", () => { if (this.activeTarget) this.canvas.previewPlay(this.activeTarget, this.activeAnim); });
+    const dClip = $("#tl-delclip", d);
+    if (dClip) dClip.addEventListener("click", () => {
+      const id = this.activeTarget, clipId = this.activeAnim;
+      if (!id || !clipId) return;
+      store.removeAnim(id, clipId);
+      this.activeAnim = this._firstClipId(id);
+      this.selKey = null;
+      this.detailOpen = false;
+      toast("已删除该片断");
+      this.render();
+    });
+    const vIn = $("#tl-value", d); if (vIn) vIn.addEventListener("change", () => this._editKf("value", vIn.value));
+    const tIn = $("#tl-t", d); if (tIn) tIn.addEventListener("change", () => this._editKf("t", clamp(parseFloat(tIn.value) || 0, 0, 1)));
+    const delKf = $("#tl-delkf", d); if (delKf) delKf.addEventListener("click", () => this._delKf());
+    const addKf2 = $("#tl-addkf2", d); if (addKf2) addKf2.addEventListener("click", () => this._addKf());
+    const easeHost = $("#tl-ease", d);
+    if (easeHost && this.selKey) {
+      const a = store.getAnim(this.selKey.id, this.selKey.clipId);
+      const kf = a && a.tracks[this.selKey.track] && a.tracks[this.selKey.track].keyframes[this.selKey.index];
+      if (kf) this._renderEaseEditor(easeHost, this.selKey.id, kf);
+    }
   }
 
   _bindTimeline(total, w) {
@@ -3146,7 +3238,9 @@ class AnimationPanel {
       const clip = store.addAnim(id, { label: "动画" + (store.animsOf(id).length + 1), start: 0, duration: 600, tracks: [
         { prop: "opacity", keyframes: [{ t: 0, value: "0", ease: "ease" }, { t: 1, value: "1", ease: "ease" }] },
       ] });
-      this.activeTarget = id; this.activeAnim = clip.id; this.expanded.add(id); store.select(id);
+      this.activeTarget = id; this.activeAnim = clip.id; this.expanded.add(id);
+      this.detailOpen = true;
+      store.select(id);
       toast("已添加动画，可拖动调整开始时间");
     }));
     // track bars: drag = move the whole clip in time; click = add a keyframe.
@@ -3167,12 +3261,13 @@ class AnimationPanel {
           const ns = Math.max(0, Math.round(startVal + ((e2.clientX - startX) / (laneRect.width || 1)) * total));
           a.start = ns; // every bar of this clip moves together
           tl.querySelectorAll(`.tl-bar[data-clip="${clipId}"]`).forEach(b => b.style.left = ((ns / total) * 100) + "%");
-          const sIn = $("#tl-start", tl); if (sIn) sIn.value = ns;
+          const sIn = $("#tl-start", this.detailEl); if (sIn) sIn.value = ns;
         };
         const up = (e2) => {
           window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
           if (moved) {
             this.activeTarget = id; this.activeAnim = clipId; this.expanded.add(id);
+            this.detailOpen = true;
             store.select(id); // emits "selection" -> panel + canvas follow the clip
             store._emit({ type: "update", id }); // re-render so all bars show the new start
           } else {
@@ -3212,6 +3307,7 @@ class AnimationPanel {
           window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
           this.activeTarget = id; this.activeAnim = clipId; this.expanded.add(id);
           this.selKey = { id, clipId, track: ti, index: track.keyframes.indexOf(kfObj) };
+          this.detailOpen = true;
           store._emit({ type: "update", id });
         };
         window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
@@ -3226,45 +3322,13 @@ class AnimationPanel {
       store._emit({ type: "update", id });
       this.render();
     }));
-    // keyframe editor actions
-    const vIn = $("#tl-value", tl); if (vIn) vIn.addEventListener("change", () => this._editKf("value", vIn.value));
-    const tIn = $("#tl-t", tl); if (tIn) tIn.addEventListener("change", () => this._editKf("t", clamp(parseFloat(tIn.value) || 0, 0, 1)));
-    const delKf = $("#tl-delkf", tl); if (delKf) delKf.addEventListener("click", () => this._delKf());
-    const addKf2 = $("#tl-addkf2", tl); if (addKf2) addKf2.addEventListener("click", () => this._addKf());
-    // clip controls (start / duration / play one)
-    const sIn = $("#tl-start", tl);
-    if (sIn) sIn.addEventListener("change", () => {
-      const a = store.getAnim(this.activeTarget, this.activeAnim); if (!a) return;
-      a.start = Math.max(0, +sIn.value || 0); store._emit({ type: "update", id: this.activeTarget }); this.render();
-    });
-    const dIn = $("#tl-dur", tl);
-    if (dIn) dIn.addEventListener("change", () => {
-      const a = store.getAnim(this.activeTarget, this.activeAnim); if (!a) return;
-      a.duration = Math.max(20, +dIn.value || 600); store._emit({ type: "update", id: this.activeTarget }); this.render();
-    });
-    const pClip = $("#tl-playclip", tl);
-    if (pClip) pClip.addEventListener("click", () => { if (this.activeTarget) this.canvas.previewPlay(this.activeTarget, this.activeAnim); });
-    const dClip = $("#tl-delclip", tl);
-    if (dClip) dClip.addEventListener("click", () => {
-      const id = this.activeTarget, clipId = this.activeAnim;
-      if (!id || !clipId) return;
-      store.removeAnim(id, clipId);
-      this.activeAnim = this._firstClipId(id);
-      this.selKey = null;
-      toast("已删除该片断");
-      this.render();
-    });
-    const easeHost = $("#tl-ease", tl);
-    if (easeHost && this.selKey) {
-      const a = store.getAnim(this.selKey.id, this.selKey.clipId);
-      const kf = a && a.tracks[this.selKey.track] && a.tracks[this.selKey.track].keyframes[this.selKey.index];
-      if (kf) this._renderEaseEditor(easeHost, this.selKey.id, kf);
-    }
+    // the clip / keyframe editors live in the left pane (see renderDetail)
   }
 
   // Select (and reveal the editor of) one clip without touching selKey.
   _activateClip(id, clipId) {
     this.activeTarget = id; this.activeAnim = clipId; this.expanded.add(id);
+    this.detailOpen = true;
     store.select(id);
     this.render();
   }
@@ -3280,6 +3344,7 @@ class AnimationPanel {
     track.keyframes.sort((x, y) => x.t - y.t);
     this.activeTarget = id; this.activeAnim = clipId; this.expanded.add(id);
     this.selKey = { id, clipId, track: ti, index: track.keyframes.indexOf(kf) };
+    this.detailOpen = true;
     store.select(id);
     store._emit({ type: "update", id });
     this.render();
