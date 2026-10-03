@@ -5,6 +5,7 @@ import { clamp, debounce } from "./util.js";
 
 const SNAP = 4;       // movement snap (px)
 const MIN_SIZE = 8;   // min element size (px)
+const PREVIEW_ANIM_ID = "wf-preview"; // marks the animations created by previewPlay
 
 const HANDLE_DIRS = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
@@ -136,13 +137,25 @@ export class Canvas {
   // ----- rendering -----
   render() {
     const docs = document.createDocumentFragment();
-    this.nodeMap.clear();
+    // Build into a LOCAL map and only swap it in at the end: previously the live
+    // map was cleared first, so an element that failed to build left the canvas
+    // showing the previous DOM while the node map stayed half-empty — every later
+    // element then had "no node" and could not be animated or played at all.
+    const map = new Map();
     for (const el of store.elements()) {
-      const node = this._buildNode(el);
-      this._applyStyle(node, el);
-      this.nodeMap.set(el.id, node);
+      if (!el || !el.id) continue;
+      let node;
+      try {
+        node = this._buildNode(el);
+        this._applyStyle(node, el);
+      } catch (err) {
+        console.warn("[WebFacer] 渲染元素失败，已跳过：", el.name, el.type, err);
+        continue; // one broken element must not take the rest of the canvas down
+      }
+      map.set(el.id, node);
       docs.appendChild(node);
     }
+    this.nodeMap = map;
     this.canvas.textContent = "";
     this.canvas.appendChild(docs);
     this.canvas.appendChild(this.frame);
@@ -458,20 +471,120 @@ export class Canvas {
 
   nodeFor(id) { return this.nodeMap.get(id) || null; }
 
-  previewPlay(id) {
+  // Play an element's animation.
+  //   previewPlay(id)           → the element's WHOLE timeline (every clip it has)
+  //   previewPlay(id, clipId)   → just that one clip, starting right away
+  //
+  // Everything is built as ONE Animation per animated property over the whole
+  // timeline. Previously each clip got its own Animation: two Animations on the
+  // same node+property override each other, and because their fill covers the
+  // window BEFORE their own start, the later clip masked every earlier one — so
+  // "play all" only ever showed one clip per property. Composing the clips into a
+  // single keyframe list (with a hold between clips) makes all of them play, and
+  // fill:"both" keeps the end state, exactly like the exported CSS.
+  previewPlay(id, clipId = null) {
     const node = this.nodeMap.get(id);
-    const clips = store.animsOf(id);
-    if (!node || !clips.length || !node.animate) return;
-    node.getAnimations && node.getAnimations().forEach(a => a.cancel());
-    for (const anim of clips) {
-      const dur = +anim.duration || 300;
-      const delay = +(anim.start || 0);
-      for (const track of (anim.tracks || [])) {
-        const kfs = (track.keyframes || []).slice().sort((a, b) => (a.t || 0) - (b.t || 0));
-        if (!kfs.length) continue;
-        const wf = kfs.map(k => ({ [track.prop]: k.value, offset: +k.t, easing: k.ease || "ease" }));
-        try { node.animate(wf, { duration: dur, delay, fill: "backwards" }); } catch (e) { /* ignore */ }
+    if (!node || !node.animate) return { count: 0, failed: [], why: node ? "元素节点不支持动画" : "画布上没有该元素的节点" };
+    const all = store.animsOf(id).filter(a => a && (a.tracks || []).length);
+    const picked = clipId ? all.filter(a => a.id === clipId) : all;
+    if (!picked.length) return { count: 0, failed: [], why: "没有带关键帧的轨道" };
+    // A container animates its CONTENTS too. The canvas keeps every element as a
+    // sibling (flat DOM with absolute coordinates), while the exported HTML nests
+    // children inside their container — so without this, animating a 编组/容器
+    // (transparent box, children drawn on top of it) looked like nothing happened.
+    const nodes = [node, ...this._subtreeNodes(id)];
+    nodes.forEach(n => this._cancelPreview(n));
+
+    const failed = [];
+    let count = 0;
+    const apply = (prop, pts, total, delay) => {
+      let any = false;
+      for (const n of nodes) if (this._playTrack(n, prop, pts, total, delay)) any = true;
+      if (any) count++; else failed.push(prop);
+    };
+
+    // single clip → play it on its own, immediately
+    if (clipId) {
+      const a = picked[0];
+      const dur = +a.duration || 600;
+      for (const track of (a.tracks || [])) apply(track.prop, this._trackPoints(track, 0, dur), dur, 0);
+      return { count, failed, why: "" };
+    }
+
+    // whole timeline → one Animation per property, covering every clip
+    const clips = picked.slice().sort((x, y) => (+x.start || 0) - (+y.start || 0));
+    const total = Math.max(1, ...clips.map(a => (+a.start || 0) + (+a.duration || 600)));
+    const props = [];
+    for (const a of clips) for (const t of (a.tracks || [])) if (t && t.prop && !props.includes(t.prop)) props.push(t.prop);
+    for (const prop of props) {
+      const pts = [];
+      for (const a of clips) {
+        const dur = +a.duration || 600;
+        let track = null;
+        for (const t of (a.tracks || [])) if (t && t.prop === prop) track = t; // last track of a clip wins
+        if (!track) continue;
+        const own = this._trackPoints(track, +(a.start || 0), dur);
+        if (!own.length) continue;
+        const prev = pts[pts.length - 1];
+        // hold the previous clip's value across the gap before this clip takes over
+        if (prev && prev.t < own[0].t - 1) pts.push({ t: own[0].t - 1, value: prev.value, ease: "linear" });
+        for (const p of own) pts.push(p);
+      }
+      apply(prop, pts, total, 0);
+    }
+    return { count, failed, why: count ? "" : "关键帧的值无效" };
+  }
+
+  // nodes of every descendant of an element (the canvas DOM itself is flat)
+  _subtreeNodes(id) {
+    const out = [];
+    const seen = new Set([id]);
+    const queue = [id];
+    while (queue.length) {
+      const cur = queue.shift();
+      for (const e of store.elements()) {
+        if (!e || e.parentId !== cur || seen.has(e.id)) continue;
+        seen.add(e.id);
+        queue.push(e.id);
+        const n = this.nodeMap.get(e.id);
+        if (n && n.animate) out.push(n);
       }
     }
+    return out;
+  }
+
+  // clip-relative keyframes → absolute points on the element's timeline
+  _trackPoints(track, start, dur) {
+    const kfs = (track.keyframes || []).slice().sort((x, y) => (x.t || 0) - (y.t || 0));
+    return kfs.map(k => ({ t: start + clamp(+k.t || 0, 0, 1) * dur, value: k.value, ease: k.ease || "ease" }));
+  }
+
+  // returns true when the browser accepted the animation
+  _playTrack(node, prop, pts, total, delay) {
+    if (!prop || !pts || !pts.length) return false;
+    const wf = [];
+    for (const p of pts.slice().sort((x, y) => x.t - y.t)) {
+      const offset = clamp(p.t / total, 0, 1);
+      const frame = { [prop]: p.value, offset, easing: p.ease || "ease" };
+      const last = wf[wf.length - 1];
+      if (last && last.offset === offset) wf[wf.length - 1] = frame; // the later clip wins a tie
+      else wf.push(frame);
+    }
+    // pin both ends so fill:"both" holds the clip's own first/last value
+    // instead of interpolating from the element's plain style
+    if (wf[0].offset > 0) wf.unshift(Object.assign({}, wf[0], { offset: 0 }));
+    const tail = wf[wf.length - 1];
+    if (tail.offset < 1) wf.push(Object.assign({}, tail, { offset: 1, easing: "linear" }));
+    try {
+      const anim = node.animate(wf, { duration: total, delay, fill: "both" });
+      anim.id = PREVIEW_ANIM_ID;
+      return true;
+    } catch (e) { return false; } // invalid value → reported by the caller
+  }
+
+  // only stop OUR preview animations — never a CSS animation the element may have
+  _cancelPreview(node) {
+    if (!node.getAnimations) return;
+    node.getAnimations().forEach(a => { if (a.id === PREVIEW_ANIM_ID) a.cancel(); });
   }
 }

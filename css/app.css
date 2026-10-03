@@ -615,16 +615,6 @@ input[type="range"].ctl { padding: 0; border: none; background: transparent; }
 .tl-tick { position: absolute; top: 0; transform: translateX(-50%); font-size: 9px; color: var(--md-on-surface-variant); }
 .tl-tick i { display: block; width: 1px; height: 6px; background: var(--md-outline); margin: 0 auto 2px; }
 .tl-playhead { position: absolute; top: 0; bottom: -4px; width: 2px; background: var(--md-error); pointer-events: none; }
-.tl-track { display: flex; align-items: stretch; gap: 6px; margin-bottom: 6px; }
-.tl-track-label { flex: 0 0 120px; font-family: var(--mono); font-size: 11px; display: flex; align-items: center; justify-content: space-between; gap: 4px; }
-.tl-del-track { background: none; border: none; color: var(--md-on-surface-variant); cursor: pointer; font-size: 12px; }
-.tl-del-track:hover { color: var(--md-error); }
-.tl-lane { position: relative; flex: 1; height: 26px; background: var(--md-surface-container); border-radius: 5px; cursor: crosshair; }
-.tl-lane:hover { background: var(--md-surface-container-high); }
-.tl-kf { position: absolute; top: 50%; transform: translate(-50%,-50%); color: var(--md-primary); font-size: 13px; cursor: grab; }
-.tl-kf.on { color: var(--md-error); }
-.tl-kf:hover { color: var(--md-primary); }
-.tl-kf-edit { margin-top: 10px; padding: 10px; background: var(--md-surface-container); border-radius: 8px; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
 .tl-kf-edit-head { width: 100%; font-size: 12px; font-weight: 600; color: var(--md-on-surface); }
 .tl-ease-label { width: 100%; font-size: 11px; color: var(--md-on-surface-variant); margin-top: 4px; }
 .tl-ease { display: flex; flex-direction: column; gap: 6px; }
@@ -651,18 +641,22 @@ input[type="range"].ctl { padding: 0; border: none; background: transparent; }
 .tl-el-name:hover { background: var(--md-surface-container); color: var(--md-on-surface); }
 .tl-lane-add { width: 20px; border: none; background: transparent; color: var(--md-on-surface-variant); font-size: 14px; cursor: pointer; border-radius: 4px; }
 .tl-lane-add:hover { background: var(--md-surface-container-high); color: var(--md-primary); }
-.tl-clip-row, .tl-track-row { border-bottom: 1px solid var(--md-outline-variant); }
-.tl-clip-label { font-size: 10.5px; color: var(--md-on-surface-variant); }
+.tl-track-row { border-bottom: 1px solid var(--md-outline-variant); }
+.tl-clip-group + .tl-clip-group { border-top: 1px solid var(--md-outline); }
 .tl-del-clip, .tl-del-track { border: none; background: transparent; color: var(--md-on-surface-variant); cursor: pointer; font-size: 12px; margin-left: 4px; }
 .tl-del-clip:hover, .tl-del-track:hover { color: var(--md-error); }
-.tl-clip { position: absolute; top: 3px; bottom: 3px; display: flex; align-items: center; padding: 0 6px; font-size: 10px; color: var(--md-on-primary-container); background: var(--md-primary-container); border: 1px solid var(--md-primary); border-radius: 5px; cursor: grab; overflow: hidden; white-space: nowrap; }
-.tl-clip:hover { background: #2c5a8f; color: #fff; }
-.tl-clip.sel { background: var(--md-primary); color: var(--md-on-primary); }
-.tl-lane { position: relative; height: 26px; background: var(--md-surface-container); border-radius: 4px; cursor: crosshair; margin: 1px 0; }
-.tl-lane:hover { background: var(--md-surface-container-high); }
+/* one property track = one bar spanning its clip's [start, start+duration] range;
+   keyframes sit inside the bar (left: t*100%), so they line up with the ruler */
+.tl-bar { position: absolute; top: 3px; bottom: 3px; display: flex; align-items: center; padding: 0 6px; font-size: 10px; color: var(--md-on-primary-container); background: var(--md-primary-container); border: 1px solid var(--md-primary); border-radius: 5px; cursor: grab; touch-action: none; }
+.tl-bar:hover { background: #2c5a8f; color: #fff; }
+.tl-bar.sel { background: var(--md-primary); color: var(--md-on-primary); }
+.tl-bar.empty { background: transparent; border-style: dashed; }
+.tl-bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .tl-kf { position: absolute; top: 50%; transform: translate(-50%,-50%); color: var(--md-primary); font-size: 13px; cursor: grab; }
 .tl-kf.on { color: var(--md-error); }
 .tl-kf:hover { color: var(--md-primary); }
+.tl-bar.sel .tl-kf { color: var(--md-on-primary); }
+.tl-bar.sel .tl-kf.on { color: var(--md-error-container); }
 .tl-kfed-box { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 8px 10px; background: var(--md-surface-container); border-radius: 8px; margin: 3px 6px 3px 116px; }
 .tl-cliped-box { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 8px 10px; background: var(--md-secondary-container); border-radius: 8px; margin: 3px 6px 3px 116px; }
 .tl-kfed-title { width: 100%; font-size: 11.5px; font-weight: 600; }
