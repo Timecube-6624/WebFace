@@ -1,6 +1,6 @@
 // state.js — project/element store with undo-redo and persistence.
 import { Emitter, uid, deepClone } from "./util.js";
-import { makeElement } from "./components.js";
+import { makeElement, getComponent } from "./components.js";
 
 const LS_KEY = "webfacer.project.v1";
 
@@ -100,8 +100,16 @@ export class Store extends Emitter {
   // ------ element queries ------
   isHidden(id) { return this.hidden.has(id); }
   toggleHidden(id) {
-    if (this.hidden.has(id)) this.hidden.delete(id); else this.hidden.add(id);
-    this._emit({ type: "update", id });
+    // hiding a parent hides its whole subtree, so children "follow" it
+    const ids = [id, ...this._descendants(id)];
+    const hide = !this.hidden.has(id);
+    for (const i of ids) { if (hide) this.hidden.add(i); else this.hidden.delete(i); }
+    for (const i of ids) this._emit({ type: "update", id: i });
+  }
+  setLockedTree(id, locked) {
+    // locking a parent locks its subtree
+    const ids = [id, ...this._descendants(id)];
+    this.updateMany(ids, { locked: !!locked });
   }
   elements() { return this.project.elements; }
   getElement(id) { return this.project.elements.find(e => e.id === id) || null; }
@@ -187,9 +195,36 @@ export class Store extends Emitter {
     if (!el) return;
     if (opts.history !== false && this._historyLock === 0) this.pushHistory();
     const { props, ...rest } = patch;
-    Object.assign(el, rest);
+    let moved = [];
+    if (rest.x != null || rest.y != null) {
+      const nx = rest.x != null ? rest.x : el.x;
+      const ny = rest.y != null ? rest.y : el.y;
+      delete rest.x; delete rest.y;
+      Object.assign(el, rest);
+      moved = this._translateWithDescendants(id, nx, ny);
+    } else {
+      Object.assign(el, rest);
+    }
     if (props) Object.assign(el.props, props);
     this._emit({ type: "update", id });
+    for (const mid of moved) this._emit({ type: "update", id: mid });
+  }
+
+  // Move an element to (x,y) and translate all of its descendants by the same
+  // delta, so children keep their original offset but follow the parent.
+  _translateWithDescendants(id, x, y) {
+    const el = this.getElement(id);
+    if (!el) return [];
+    const dx = x - el.x, dy = y - el.y;
+    el.x = x; el.y = y;
+    const moved = [];
+    if (dx || dy) {
+      for (const did of this._descendants(id)) {
+        const d = this.getElement(did);
+        if (d) { d.x += dx; d.y += dy; moved.push(did); }
+      }
+    }
+    return moved;
   }
 
   removeElement(id) {
@@ -210,9 +245,13 @@ export class Store extends Emitter {
     const list = [...new Set(ids)].map(id => this.getElement(id)).filter(Boolean);
     if (!list.length) return;
     if (opts.history !== false && this._historyLock === 0) this.pushHistory();
+    const hasPos = patch.x != null || patch.y != null;
     for (const el of list) {
-      if (patch.x != null) el.x = patch.x;
-      if (patch.y != null) el.y = patch.y;
+      if (hasPos) {
+        const nx = patch.x != null ? patch.x : el.x;
+        const ny = patch.y != null ? patch.y : el.y;
+        this._translateWithDescendants(el.id, nx, ny);
+      }
       if (patch.width != null) el.width = patch.width;
       if (patch.height != null) el.height = patch.height;
       if (patch.name != null) el.name = patch.name;
@@ -276,16 +315,19 @@ export class Store extends Emitter {
     this.pushHistory();
     const W = this.project.width, H = this.project.height;
     const w = el.width, h = el.height;
+    let nx = el.x, ny = el.y;
     switch (which) {
-      case "left": el.x = 0; break;
-      case "center-x": el.x = (W - w) / 2; break;
-      case "right": el.x = W - w; break;
-      case "top": el.y = 0; break;
-      case "center-y": el.y = (H - h) / 2; break;
-      case "bottom": el.y = H - h; break;
+      case "left": nx = 0; break;
+      case "center-x": nx = (W - w) / 2; break;
+      case "right": nx = W - w; break;
+      case "top": ny = 0; break;
+      case "center-y": ny = (H - h) / 2; break;
+      case "bottom": ny = H - h; break;
       default: break;
     }
+    const moved = this._translateWithDescendants(id, nx, ny);
     this._emit({ type: "update", id });
+    for (const mid of moved) this._emit({ type: "update", id: mid });
   }
 
   // ----- z-order (later in array = rendered on top) -----
@@ -302,6 +344,124 @@ export class Store extends Emitter {
     else if (dir === "down") j = Math.max(0, i - 1);
     arr.splice(j, 0, el);
     this._emit({ type: "structure" });
+  }
+
+  // ----- hierarchy: reparent / indent / outdent / reorder -----
+  isContainer(id) {
+    const el = this.getElement(id);
+    return !!el && getComponent(el.type).isContainer;
+  }
+  setParent(id, parentId) {
+    const el = this.getElement(id);
+    if (!el) return false;
+    if (parentId) {
+      if (parentId === id) return false;
+      const p = this.getElement(parentId);
+      if (!p || !getComponent(p.type).isContainer) return false;
+      if (this._descendants(id).includes(parentId)) return false; // prevent cycles
+    }
+    const changed = (el.parentId || null) !== (parentId || null);
+    if (!changed && !parentId) return true;
+    this.pushHistory();
+    el.parentId = parentId || null;
+    // Keep children drawn ON TOP of their parent (and the subtree contiguous),
+    // so nesting immediately shows a visible change on the canvas.
+    if (parentId) this._placeSubtreeAfterParent(id);
+    this._emit({ type: "structure" });
+    return true;
+  }
+  _placeSubtreeAfterParent(id) {
+    const el = this.getElement(id);
+    if (!el || !el.parentId) return;
+    const arr = this.project.elements;
+    const ids = [id, ...this._descendants(id)];
+    const moved = ids.map(i => arr.find(e => e.id === i)).filter(Boolean);
+    for (const m of moved) { const k = arr.indexOf(m); if (k >= 0) arr.splice(k, 1); }
+    const pIdx = arr.findIndex(e => e.id === el.parentId);
+    const at = pIdx < 0 ? arr.length : pIdx + 1;
+    arr.splice(at, 0, ...moved);
+  }
+  // move `id` to sit next to `refId` in the element array (z-order + sibling order)
+  reorderRelative(id, refId, after) {
+    if (id === refId) return;
+    const arr = this.project.elements;
+    const i = arr.findIndex(e => e.id === id);
+    if (i < 0) return;
+    this.pushHistory();
+    const [el] = arr.splice(i, 1);
+    let j = arr.findIndex(e => e.id === refId);
+    if (j < 0) arr.push(el);
+    else { if (after) j += 1; arr.splice(j, 0, el); }
+    this._emit({ type: "structure" });
+  }
+  indentElement(id) {
+    const el = this.getElement(id);
+    if (!el) return false;
+    const sibs = this.project.elements.filter(e => (e.parentId || null) === (el.parentId || null));
+    const i = sibs.findIndex(e => e.id === id);
+    for (let j = i - 1; j >= 0; j--) {
+      if (getComponent(sibs[j].type).isContainer) return this.setParent(id, sibs[j].id);
+    }
+    return false;
+  }
+  outdentElement(id) {
+    const el = this.getElement(id);
+    if (!el || !el.parentId) return false;
+    const p = this.getElement(el.parentId);
+    return this.setParent(id, p ? (p.parentId || null) : null);
+  }
+
+  // ----- grouping -----
+  // Wraps only the OUTERMOST selected elements, so existing inner nesting is
+  // preserved (grouping once adds exactly one level).
+  groupElements(ids) {
+    const set = new Set(ids);
+    const roots = ids.filter(id => {
+      let p = (this.getElement(id) || {}).parentId;
+      while (p) { if (set.has(p)) return false; p = (this.getElement(p) || {}).parentId; }
+      return !!this.getElement(id);
+    });
+    const list = roots.map(i => this.getElement(i)).filter(Boolean);
+    if (!list.length) return null;
+    if (list.length === 1 && [...new Set(ids)].length < 2) return null;
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const e of list) {
+      x1 = Math.min(x1, e.x); y1 = Math.min(y1, e.y);
+      x2 = Math.max(x2, e.x + e.width); y2 = Math.max(y2, e.y + e.height);
+    }
+    this.pushHistory();
+    const g = makeElement("group", { x: x1, y: y1, width: x2 - x1, height: y2 - y1, name: "编组" });
+    g.id = uid("group");
+    g.parentId = list[0].parentId || null;
+    // insert behind the grouped elements (lowest index) so children stay on top
+    const arr = this.project.elements;
+    let minIdx = arr.length;
+    for (const e of list) minIdx = Math.min(minIdx, arr.findIndex(x => x.id === e.id));
+    arr.splice(minIdx < 0 ? arr.length : minIdx, 0, g);
+    for (const e of list) e.parentId = g.id;
+    this._emit({ type: "structure" });
+    this.setSelection([g.id]);
+    return g;
+  }
+  // Dissolve a group: children move up to the group's parent.
+  // opts.keepSelf = true keeps the container element itself (just elevates children).
+  ungroupElement(id, opts = {}) {
+    const g = this.getElement(id);
+    if (!g) return;
+    const keepSelf = !!opts.keepSelf;
+    const kids = this.childrenOf(id);
+    this.pushHistory();
+    for (const k of kids) k.parentId = g.parentId || null;
+    if (!keepSelf) {
+      this.project.elements = this.project.elements.filter(e => e.id !== id);
+      this.project.logic = (this.project.logic || []).filter(l => l.triggerId !== id && l.targetId !== id);
+      this.project.selectedIds = this.project.selectedIds.filter(s => s !== id);
+      if (!this.project.selectedIds.length) this.project.selectedId = null;
+    }
+    this._emit({ type: "structure" });
+    if (!keepSelf) this._emit({ type: "logic" });
+    this._emit({ type: "selection" });
+    if (!keepSelf && kids.length) this.setSelection(kids.map(k => k.id));
   }
 
   setLocked(id, locked) {

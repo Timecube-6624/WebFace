@@ -62,6 +62,12 @@ export const MODES = [
         { id: "z-down", label: "下移", icon: "▼" },
         { id: "z-back", label: "置底", icon: "⇟" },
       ]},
+      { label: "编组", tools: [
+        { id: "group", label: "编组", icon: "▣" },
+        { id: "ungroup", label: "取消编组", icon: "▢" },
+        { id: "indent", label: "缩进", icon: "⇥" },
+        { id: "outdent", label: "取消缩进", icon: "⇤" },
+      ]},
       { label: "对象", tools: [
         { id: "lock", label: "锁定", icon: "🔒" },
         { id: "hide", label: "隐藏", icon: "◐" },

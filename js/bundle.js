@@ -164,6 +164,20 @@ const COMPONENTS = {
       "align-items": "flex-start", "justify-content": "flex-start", "gap": "8px",
     },
   },
+  group: {
+    key: "group", label: "编组", icon: "▣", tag: "div", isContainer: true,
+    size: { width: 300, height: 200 },
+    content: "",
+    props: {
+      "font-size": "14px", "font-weight": 400, "color": "#111827",
+      "line-height": 1.5, "text-align": "left", "font-family": "inherit",
+      "margin": "0px", "padding": "0px", "background-color": "transparent",
+      "border-width": "0px", "border-style": "none", "border-color": "transparent",
+      "border-radius": "0px", "box-shadow": "none", "opacity": 1,
+      "display": "block", "width": "100%", "height": "100%",
+      "align-items": "flex-start", "justify-content": "flex-start", "gap": "0px",
+    },
+  },
   container: {
     key: "container", label: "容器", icon: "⊡", tag: "div", isContainer: true,
     size: { width: 420, height: 260 },
@@ -302,7 +316,7 @@ WF.makeElement = makeElement;
 'use strict';
 // state.js — project/element store with undo-redo and persistence.
 const { Emitter, uid, deepClone } = WF;
-const { makeElement } = WF;
+const { makeElement, getComponent } = WF;
 const LS_KEY = "webfacer.project.v1";
 
 function newAnimClip() {
@@ -401,8 +415,16 @@ class Store extends Emitter {
   // ------ element queries ------
   isHidden(id) { return this.hidden.has(id); }
   toggleHidden(id) {
-    if (this.hidden.has(id)) this.hidden.delete(id); else this.hidden.add(id);
-    this._emit({ type: "update", id });
+    // hiding a parent hides its whole subtree, so children "follow" it
+    const ids = [id, ...this._descendants(id)];
+    const hide = !this.hidden.has(id);
+    for (const i of ids) { if (hide) this.hidden.add(i); else this.hidden.delete(i); }
+    for (const i of ids) this._emit({ type: "update", id: i });
+  }
+  setLockedTree(id, locked) {
+    // locking a parent locks its subtree
+    const ids = [id, ...this._descendants(id)];
+    this.updateMany(ids, { locked: !!locked });
   }
   elements() { return this.project.elements; }
   getElement(id) { return this.project.elements.find(e => e.id === id) || null; }
@@ -488,9 +510,36 @@ class Store extends Emitter {
     if (!el) return;
     if (opts.history !== false && this._historyLock === 0) this.pushHistory();
     const { props, ...rest } = patch;
-    Object.assign(el, rest);
+    let moved = [];
+    if (rest.x != null || rest.y != null) {
+      const nx = rest.x != null ? rest.x : el.x;
+      const ny = rest.y != null ? rest.y : el.y;
+      delete rest.x; delete rest.y;
+      Object.assign(el, rest);
+      moved = this._translateWithDescendants(id, nx, ny);
+    } else {
+      Object.assign(el, rest);
+    }
     if (props) Object.assign(el.props, props);
     this._emit({ type: "update", id });
+    for (const mid of moved) this._emit({ type: "update", id: mid });
+  }
+
+  // Move an element to (x,y) and translate all of its descendants by the same
+  // delta, so children keep their original offset but follow the parent.
+  _translateWithDescendants(id, x, y) {
+    const el = this.getElement(id);
+    if (!el) return [];
+    const dx = x - el.x, dy = y - el.y;
+    el.x = x; el.y = y;
+    const moved = [];
+    if (dx || dy) {
+      for (const did of this._descendants(id)) {
+        const d = this.getElement(did);
+        if (d) { d.x += dx; d.y += dy; moved.push(did); }
+      }
+    }
+    return moved;
   }
 
   removeElement(id) {
@@ -511,9 +560,13 @@ class Store extends Emitter {
     const list = [...new Set(ids)].map(id => this.getElement(id)).filter(Boolean);
     if (!list.length) return;
     if (opts.history !== false && this._historyLock === 0) this.pushHistory();
+    const hasPos = patch.x != null || patch.y != null;
     for (const el of list) {
-      if (patch.x != null) el.x = patch.x;
-      if (patch.y != null) el.y = patch.y;
+      if (hasPos) {
+        const nx = patch.x != null ? patch.x : el.x;
+        const ny = patch.y != null ? patch.y : el.y;
+        this._translateWithDescendants(el.id, nx, ny);
+      }
       if (patch.width != null) el.width = patch.width;
       if (patch.height != null) el.height = patch.height;
       if (patch.name != null) el.name = patch.name;
@@ -577,16 +630,19 @@ class Store extends Emitter {
     this.pushHistory();
     const W = this.project.width, H = this.project.height;
     const w = el.width, h = el.height;
+    let nx = el.x, ny = el.y;
     switch (which) {
-      case "left": el.x = 0; break;
-      case "center-x": el.x = (W - w) / 2; break;
-      case "right": el.x = W - w; break;
-      case "top": el.y = 0; break;
-      case "center-y": el.y = (H - h) / 2; break;
-      case "bottom": el.y = H - h; break;
+      case "left": nx = 0; break;
+      case "center-x": nx = (W - w) / 2; break;
+      case "right": nx = W - w; break;
+      case "top": ny = 0; break;
+      case "center-y": ny = (H - h) / 2; break;
+      case "bottom": ny = H - h; break;
       default: break;
     }
+    const moved = this._translateWithDescendants(id, nx, ny);
     this._emit({ type: "update", id });
+    for (const mid of moved) this._emit({ type: "update", id: mid });
   }
 
   // ----- z-order (later in array = rendered on top) -----
@@ -603,6 +659,124 @@ class Store extends Emitter {
     else if (dir === "down") j = Math.max(0, i - 1);
     arr.splice(j, 0, el);
     this._emit({ type: "structure" });
+  }
+
+  // ----- hierarchy: reparent / indent / outdent / reorder -----
+  isContainer(id) {
+    const el = this.getElement(id);
+    return !!el && getComponent(el.type).isContainer;
+  }
+  setParent(id, parentId) {
+    const el = this.getElement(id);
+    if (!el) return false;
+    if (parentId) {
+      if (parentId === id) return false;
+      const p = this.getElement(parentId);
+      if (!p || !getComponent(p.type).isContainer) return false;
+      if (this._descendants(id).includes(parentId)) return false; // prevent cycles
+    }
+    const changed = (el.parentId || null) !== (parentId || null);
+    if (!changed && !parentId) return true;
+    this.pushHistory();
+    el.parentId = parentId || null;
+    // Keep children drawn ON TOP of their parent (and the subtree contiguous),
+    // so nesting immediately shows a visible change on the canvas.
+    if (parentId) this._placeSubtreeAfterParent(id);
+    this._emit({ type: "structure" });
+    return true;
+  }
+  _placeSubtreeAfterParent(id) {
+    const el = this.getElement(id);
+    if (!el || !el.parentId) return;
+    const arr = this.project.elements;
+    const ids = [id, ...this._descendants(id)];
+    const moved = ids.map(i => arr.find(e => e.id === i)).filter(Boolean);
+    for (const m of moved) { const k = arr.indexOf(m); if (k >= 0) arr.splice(k, 1); }
+    const pIdx = arr.findIndex(e => e.id === el.parentId);
+    const at = pIdx < 0 ? arr.length : pIdx + 1;
+    arr.splice(at, 0, ...moved);
+  }
+  // move `id` to sit next to `refId` in the element array (z-order + sibling order)
+  reorderRelative(id, refId, after) {
+    if (id === refId) return;
+    const arr = this.project.elements;
+    const i = arr.findIndex(e => e.id === id);
+    if (i < 0) return;
+    this.pushHistory();
+    const [el] = arr.splice(i, 1);
+    let j = arr.findIndex(e => e.id === refId);
+    if (j < 0) arr.push(el);
+    else { if (after) j += 1; arr.splice(j, 0, el); }
+    this._emit({ type: "structure" });
+  }
+  indentElement(id) {
+    const el = this.getElement(id);
+    if (!el) return false;
+    const sibs = this.project.elements.filter(e => (e.parentId || null) === (el.parentId || null));
+    const i = sibs.findIndex(e => e.id === id);
+    for (let j = i - 1; j >= 0; j--) {
+      if (getComponent(sibs[j].type).isContainer) return this.setParent(id, sibs[j].id);
+    }
+    return false;
+  }
+  outdentElement(id) {
+    const el = this.getElement(id);
+    if (!el || !el.parentId) return false;
+    const p = this.getElement(el.parentId);
+    return this.setParent(id, p ? (p.parentId || null) : null);
+  }
+
+  // ----- grouping -----
+  // Wraps only the OUTERMOST selected elements, so existing inner nesting is
+  // preserved (grouping once adds exactly one level).
+  groupElements(ids) {
+    const set = new Set(ids);
+    const roots = ids.filter(id => {
+      let p = (this.getElement(id) || {}).parentId;
+      while (p) { if (set.has(p)) return false; p = (this.getElement(p) || {}).parentId; }
+      return !!this.getElement(id);
+    });
+    const list = roots.map(i => this.getElement(i)).filter(Boolean);
+    if (!list.length) return null;
+    if (list.length === 1 && [...new Set(ids)].length < 2) return null;
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const e of list) {
+      x1 = Math.min(x1, e.x); y1 = Math.min(y1, e.y);
+      x2 = Math.max(x2, e.x + e.width); y2 = Math.max(y2, e.y + e.height);
+    }
+    this.pushHistory();
+    const g = makeElement("group", { x: x1, y: y1, width: x2 - x1, height: y2 - y1, name: "编组" });
+    g.id = uid("group");
+    g.parentId = list[0].parentId || null;
+    // insert behind the grouped elements (lowest index) so children stay on top
+    const arr = this.project.elements;
+    let minIdx = arr.length;
+    for (const e of list) minIdx = Math.min(minIdx, arr.findIndex(x => x.id === e.id));
+    arr.splice(minIdx < 0 ? arr.length : minIdx, 0, g);
+    for (const e of list) e.parentId = g.id;
+    this._emit({ type: "structure" });
+    this.setSelection([g.id]);
+    return g;
+  }
+  // Dissolve a group: children move up to the group's parent.
+  // opts.keepSelf = true keeps the container element itself (just elevates children).
+  ungroupElement(id, opts = {}) {
+    const g = this.getElement(id);
+    if (!g) return;
+    const keepSelf = !!opts.keepSelf;
+    const kids = this.childrenOf(id);
+    this.pushHistory();
+    for (const k of kids) k.parentId = g.parentId || null;
+    if (!keepSelf) {
+      this.project.elements = this.project.elements.filter(e => e.id !== id);
+      this.project.logic = (this.project.logic || []).filter(l => l.triggerId !== id && l.targetId !== id);
+      this.project.selectedIds = this.project.selectedIds.filter(s => s !== id);
+      if (!this.project.selectedIds.length) this.project.selectedId = null;
+    }
+    this._emit({ type: "structure" });
+    if (!keepSelf) this._emit({ type: "logic" });
+    this._emit({ type: "selection" });
+    if (!keepSelf && kids.length) this.setSelection(kids.map(k => k.id));
   }
 
   setLocked(id, locked) {
@@ -1197,6 +1371,7 @@ class Canvas {
     }
     node.className = "el";
     if (el.locked) node.classList.add("locked");
+    if (el.type === "group") node.classList.add("is-group-el");
     if (store.isSelected(el.id)) node.classList.add("selected");
     node.dataset.id = el.id;
     return node;
@@ -1307,12 +1482,15 @@ class Canvas {
 
   _startMove(ev, ids) {
     const start = this._clientToCanvas(ev);
-    const idSet = new Set();
-    for (const id of ids) {
-      idSet.add(id);
-      store._descendants(id).forEach(d => idSet.add(d));
-    }
-    const group = [...idSet].map(id => {
+    // Move only the "roots" of the selection; the store translates descendants
+    // automatically so children follow their parent without double-moving.
+    const idSet = new Set(ids);
+    const roots = ids.filter(id => {
+      let p = (store.getElement(id) || {}).parentId;
+      while (p) { if (idSet.has(p)) return false; p = (store.getElement(p) || {}).parentId; }
+      return !!store.getElement(id);
+    });
+    const group = roots.map(id => {
       const e = store.getElement(id);
       return e ? { id, x: e.x, y: e.y } : null;
     }).filter(Boolean);
@@ -1384,11 +1562,10 @@ class Canvas {
       nx = clamp(this._snap(nx), 0, store.state.width - 1);
       ny = clamp(this._snap(ny), 0, store.state.height - 1);
       const dx = nx - sx, dy = ny - sy;
-      const single = d.group.length === 1;
       for (const g of d.group) {
-        const patch = { x: g.x + dx, y: g.y + dy };
-        if (single) { const pid = this._hitTestParent(g.id, patch.x, patch.y); if (pid) patch.parentId = pid; }
-        store.updateElement(g.id, patch, { history: false });
+        // No automatic re-parenting: moving an element never changes its
+        // hierarchy. Grouping/nesting is manual (编组 button or layer drag).
+        store.updateElement(g.id, { x: g.x + dx, y: g.y + dy }, { history: false });
       }
     } else if (d.mode === "marquee") {
       this._drawMarquee(cur);
@@ -1462,9 +1639,8 @@ class Canvas {
     const c = getComponent(typeKey);
     const x = Math.max(0, canvasPos.x - (c.size ? c.size.width : 0) / 2);
     const y = Math.max(0, canvasPos.y - (c.size ? c.size.height : 0) / 2);
+    // Inserted at the top level; nesting into a container is a manual action.
     const el = store.addElement(typeKey, { x, y });
-    const parentId = this._hitTestParent(el.id, el.x, el.y);
-    if (parentId) store.updateElement(el.id, { parentId }, { history: false });
     store.select(el.id);
     return el;
   }
@@ -1502,7 +1678,8 @@ WF.Canvas = Canvas;
 // ---- js/left-panel.js ----
 (function(){
 'use strict';
-// left-panel.js — library (draggable components) + layers tree.
+// left-panel.js — library (draggable components) + layers tree with
+// hierarchy editing: drag to re-parent / reorder, group & ungroup.
 const { store } = WF;
 const { COMPONENTS, LIBRARY_ORDER, getComponent } = WF;
 const { showDragGhost, moveDragGhost, hideDragGhost } = WF;
@@ -1512,15 +1689,14 @@ class LeftPanel {
     this.canvas = canvas;
     this.tabs = [...document.querySelectorAll("#left-tabs .panel-tab")];
     this.activeTab = "library";
+    this.collapsed = new Set(); // layer ids whose children are hidden
     this._bindTabs();
     this._bindStore();
     this._setTab("library");
   }
 
   _bindTabs() {
-    this.tabs.forEach(tab => {
-      tab.addEventListener("click", () => this._setTab(tab.dataset.tab));
-    });
+    this.tabs.forEach(tab => tab.addEventListener("click", () => this._setTab(tab.dataset.tab)));
   }
   _setTab(name) {
     this.activeTab = name;
@@ -1528,14 +1704,8 @@ class LeftPanel {
     if (name === "library") this._renderLibrary();
     else this._renderLayers();
   }
-
   _bindStore() {
-    store.on("change", (reason) => {
-      if (this.activeTab === "layers") this._renderLayers();
-      if (this.activeTab === "library" && (reason.type === "add" || reason.type === "remove" || reason.type === "structure")) {
-        // library grid static; no re-render needed
-      }
-    });
+    store.on("change", () => { if (this.activeTab === "layers") this._renderLayers(); });
   }
 
   // ----- Library grid -----
@@ -1556,8 +1726,7 @@ class LeftPanel {
       const name = document.createElement("div");
       name.className = "lib-name";
       name.textContent = c.label;
-      item.appendChild(thumb);
-      item.appendChild(name);
+      item.appendChild(thumb); item.appendChild(name);
       this._makeDraggable(item, key);
       grid.appendChild(item);
     }
@@ -1570,19 +1739,13 @@ class LeftPanel {
       ev.preventDefault();
       const c = getComponent(typeKey);
       ghost = showDragGhost(`＋ ${c.label}`, ev);
-      const move = (e) => {
-        moveDragGhost(ghost, e);
-        // highlight drop target
-      };
+      const move = (e) => moveDragGhost(ghost, e);
       const up = (e) => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
-        hideDragGhost(ghost);
-        ghost = null;
+        hideDragGhost(ghost); ghost = null;
         const pos = this.canvas.coordsFromClient(e.clientX, e.clientY);
-        if (pos.inside) {
-          this.canvas.addAt(typeKey, pos);
-        }
+        if (pos.inside) this.canvas.addAt(typeKey, pos);
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
@@ -1592,57 +1755,194 @@ class LeftPanel {
   // ----- Layers tree -----
   _renderLayers() {
     this.body.textContent = "";
+    const sel = store.selected();
+    const bar = document.createElement("div");
+    bar.className = "layers-bar";
+    const mk = (label, title, fn, disabled) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "btn btn-outlined btn-sm"; b.textContent = label; b.title = title;
+      if (disabled) b.disabled = true;
+      b.addEventListener("click", fn);
+      return b;
+    };
+    bar.appendChild(mk("编组", "把选中的多个元素编成一组", () => {
+      const g = store.groupElements(store.selected());
+      if (g) toast("已编组（只新增一层，保留内部嵌套）"); else toast("请至少选中 2 个元素", false);
+    }, sel.length < 2));
+    bar.appendChild(mk("取消编组", "解散选中的编组（▣），子级会提升到上一级（不会删除）", () => {
+      const ids = store.selected().filter(id => { const e = store.getElement(id); return e && e.type === "group"; });
+      if (!ids.length) { toast("请先选中一个编组（▣）", false); return; }
+      ids.forEach(id => store.ungroupElement(id));
+      toast("已取消编组（子级已提升，未删除）");
+    }, !sel.some(id => (store.getElement(id) || {}).type === "group")));
+    this.body.appendChild(bar);
+
     const root = document.createElement("div");
     root.className = "layers";
     const els = store.elements();
-    const childrenOf = (pid) => els.filter(e => e.parentId === pid);
-
-    const walk = (pid, parentEl) => {
-      for (const el of els.filter(e => e.parentId === pid)) {
+    const walk = (pid, parentEl, depth) => {
+      for (const el of els.filter(e => (e.parentId || null) === pid)) {
+        const kids = els.filter(e => e.parentId === el.id);
+        const isCont = getComponent(el.type).isContainer;
         const row = document.createElement("div");
-        row.className = "layer-row" + (store.state.selectedId === el.id ? " sel" : "");
+        row.className = "layer-row" + (store.isSelected(el.id) ? " sel" : "");
         row.dataset.id = el.id;
 
         const tog = document.createElement("span");
         tog.className = "tog";
-        tog.textContent = store.isHidden(el.id) ? "●" : "◐";
-        tog.title = "显示/隐藏";
-        tog.addEventListener("pointerdown", (ev) => { ev.stopPropagation(); });
-        tog.addEventListener("click", (ev) => { ev.stopPropagation(); store.toggleHidden(el.id); });
+        if (kids.length) {
+          tog.textContent = this.collapsed.has(el.id) ? "▸" : "▾";
+          tog.addEventListener("pointerdown", (e) => e.stopPropagation());
+          tog.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (this.collapsed.has(el.id)) this.collapsed.delete(el.id); else this.collapsed.add(el.id);
+            this._renderLayers();
+          });
+        } else { tog.textContent = ""; tog.style.width = "12px"; }
 
+        const handle = document.createElement("span");
+        handle.className = "drag";
+        handle.textContent = "⠿";
+        handle.title = "拖动可调整层级 / 顺序";
         const icon = document.createElement("span");
         icon.className = "icon";
         icon.textContent = getComponent(el.type).icon;
-
         const name = document.createElement("span");
         name.className = "name";
         name.textContent = el.name;
-
         const type = document.createElement("span");
         type.className = "type";
         type.textContent = el.type;
+        const vis = document.createElement("span");
+        vis.className = "tog";
+        vis.textContent = store.isHidden(el.id) ? "◌" : "◉";
+        vis.title = "显示/隐藏";
+        vis.addEventListener("pointerdown", (e) => e.stopPropagation());
+        vis.addEventListener("click", (e) => { e.stopPropagation(); store.toggleHidden(el.id); });
 
-        row.appendChild(tog);
-        row.appendChild(icon);
-        row.appendChild(name);
-        row.appendChild(type);
+        row.appendChild(tog); row.appendChild(handle); row.appendChild(icon);
+        row.appendChild(name); row.appendChild(type);
+        if (isCont && kids.length) {
+          const count = document.createElement("span");
+          count.className = "count";
+          count.textContent = kids.length;
+          count.title = `包含 ${kids.length} 个子级`;
+          row.appendChild(count);
+        }
+        row.appendChild(vis);
+        if (isCont) row.classList.add("is-group");
 
         row.addEventListener("click", () => store.select(el.id));
+        row.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); store.select(el.id); this._layerMenu(el.id, e.clientX, e.clientY); });
+        this._makeLayerDrag(row, el.id);
         parentEl.appendChild(row);
 
-        const kids = childrenOf(el.id);
-        if (kids.length) {
-          const childBox = document.createElement("div");
-          childBox.className = "layer-children";
-          walk(el.id, childBox);
-          parentEl.appendChild(childBox);
+        if (kids.length && !this.collapsed.has(el.id)) {
+          const box = document.createElement("div");
+          box.className = "layer-children";
+          walk(el.id, box, depth + 1);
+          parentEl.appendChild(box);
         }
       }
     };
-
-    walk(null, root);
+    walk(null, root, 0);
     this.body.appendChild(root);
   }
+
+  _makeLayerDrag(row, id) {
+    row.addEventListener("pointerdown", (ev) => {
+      if (ev.target.closest(".tog")) return;
+      const startX = ev.clientX, startY = ev.clientY;
+      let dragging = false;
+      const move = (e) => {
+        if (!dragging) {
+          if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) < 5) return;
+          dragging = true;
+          row.classList.add("dragging");
+        }
+        this._hlDrop(e);
+      };
+      const up = (e) => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        row.classList.remove("dragging");
+        this._clearDrop();
+        if (dragging) this._applyDrop(id, e);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
+  }
+  _hlDrop(ev) {
+    this._clearDrop();
+    const t = this._dropTarget(ev);
+    if (t && t.row) t.row.classList.add(t.mode === "into" ? "drop-into" : "drop-line");
+  }
+  _clearDrop() {
+    this.body.querySelectorAll(".drop-into,.drop-line").forEach(n => n.classList.remove("drop-into", "drop-line"));
+  }
+  _dropTarget(ev) {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    if (!el) return null;
+    const row = el.closest(".layer-row");
+    if (!row) return { row: null, mode: "root" };
+    const targetId = row.dataset.id;
+    const rect = row.getBoundingClientRect();
+    const rel = (ev.clientY - rect.top) / rect.height;
+    if (store.isContainer(targetId) && rel > 0.3 && rel < 0.7) return { row, targetId, mode: "into" };
+    return { row, targetId, mode: rel < 0.5 ? "before" : "after" };
+  }
+  _applyDrop(id, ev) {
+    const t = this._dropTarget(ev);
+    if (!t) return;
+    if (!t.targetId) { store.setParent(id, null); toast("已移到顶层"); return; }
+    if (t.targetId === id) return;
+    const target = store.getElement(t.targetId);
+    if (!target) return;
+    if (t.mode === "into") { store.setParent(id, t.targetId); toast(`已放入「${target.name}」`); return; }
+    if (!store.setParent(id, target.parentId || null)) return;
+    store.reorderRelative(id, t.targetId, t.mode === "after");
+    toast(t.mode === "after" ? "已移到该层之后" : "已移到该层之前");
+  }
+
+  _layerMenu(id, x, y) {
+    const old = document.querySelector(".ctx-menu");
+    if (old) old.remove();
+    const menu = document.createElement("div");
+    menu.className = "ctx-menu";
+    const add = (icon, label, disabled, fn) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "ctx-item"; b.disabled = !!disabled;
+      b.innerHTML = `<span class="icon">${icon}</span><span class="label">${label}</span>`;
+      b.addEventListener("click", () => { menu.remove(); fn(); });
+      menu.appendChild(b);
+    };
+    const el = store.getElement(id);
+    const isCont = el && getComponent(el.type).isContainer;
+    add("▣", "编组所选", store.selected().length < 2, () => {
+      const g = store.groupElements(store.selected());
+      if (g) toast("已编组（只新增一层，保留内部嵌套）"); else toast("请至少选中 2 个元素", false);
+    });
+    add("▢", "取消编组（子级提升）", el.type !== "group", () => { store.ungroupElement(id); toast("已取消编组（子级已提升，未删除）"); });
+    add("⇞", "提升子级（保留容器）", !(isCont && store.childrenOf(id).length), () => { store.ungroupElement(id, { keepSelf: true }); toast("已把子级提升到上一级"); });
+    add("⇥", "缩进（降为上一同级容器的子级）", false, () => { if (!store.indentElement(id)) toast("找不到可作为父级的容器", false); });
+    add("⇤", "取消缩进（提升一级）", !el.parentId, () => store.outdentElement(id));
+    add("⬆", "上移一层", false, () => store.moveZ(id, "up"));
+    add("⬇", "下移一层", false, () => store.moveZ(id, "down"));
+    add("🗑", "删除", false, () => store.removeElement(id));
+    menu.style.visibility = "hidden";
+    document.body.appendChild(menu);
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    menu.style.left = Math.min(x, window.innerWidth - mw - 8) + "px";
+    menu.style.top = Math.min(y, window.innerHeight - mh - 8) + "px";
+    menu.style.visibility = "visible";
+    const close = (e2) => { if (!menu.contains(e2.target)) { menu.remove(); document.removeEventListener("pointerdown", close); } };
+    setTimeout(() => document.addEventListener("pointerdown", close), 0);
+  }
+}
+
+function toast(text, ok = true) {
+  window.dispatchEvent(new CustomEvent("webfacer:toast", { detail: { text, ok } }));
 }
 
 WF.LeftPanel = LeftPanel;
@@ -2344,6 +2644,12 @@ const MODES = [
         { id: "z-up", label: "上移", icon: "▲" },
         { id: "z-down", label: "下移", icon: "▼" },
         { id: "z-back", label: "置底", icon: "⇟" },
+      ]},
+      { label: "编组", tools: [
+        { id: "group", label: "编组", icon: "▣" },
+        { id: "ungroup", label: "取消编组", icon: "▢" },
+        { id: "indent", label: "缩进", icon: "⇥" },
+        { id: "outdent", label: "取消缩进", icon: "⇤" },
       ]},
       { label: "对象", tools: [
         { id: "lock", label: "锁定", icon: "🔒" },
@@ -3056,8 +3362,20 @@ function toggleLock() {
   if (!ids.length) { toast("请先选中一个元素", false); return; }
   const allLocked = ids.every(id => store.getElement(id).locked);
   const target = !allLocked;
-  store.updateMany(ids, { locked: target });
-  toast(target ? "已锁定所选元素" : "已解锁所选元素");
+  const all = new Set();
+  ids.forEach(id => { all.add(id); store._descendants(id).forEach(d => all.add(d)); });
+  store.updateMany([...all], { locked: target });
+  toast(target ? "已锁定所选（含子级）" : "已解锁所选（含子级）");
+}
+// top-most selected elements: those whose ancestor is not also selected
+function selectionRoots() {
+  const ids = store.selected();
+  const set = new Set(ids);
+  return ids.filter(id => {
+    let p = (store.getElement(id) || {}).parentId;
+    while (p) { if (set.has(p)) return false; p = (store.getElement(p) || {}).parentId; }
+    return true;
+  });
 }
 function toggleHide() {
   const ids = store.selected();
@@ -3217,7 +3535,7 @@ function onRibbonTool(tool) {
     // layout
     case "align-left": case "align-center-x": case "align-right":
     case "align-top": case "align-center-y": case "align-bottom": {
-      const ids = store.selected(); if (!ids.length) { toast("请先选中元素", false); break; }
+      const ids = selectionRoots(); if (!ids.length) { toast("请先选中元素", false); break; }
       const which = tool.id.replace("align-", "");
       ids.forEach(x => store.alignElement(x, which));
       break;
@@ -3230,6 +3548,32 @@ function onRibbonTool(tool) {
     }
     case "lock": toggleLock(); break;
     case "hide": toggleHide(); break;
+    case "group": {
+      const ids = store.selected();
+      if (store.selected().length < 2) { toast("请至少选中 2 个元素", false); break; }
+      if (store.groupElements(ids)) toast("已编组（只新增一层，保留内部嵌套）");
+      else toast("请至少选中 2 个元素", false);
+      break;
+    }
+    case "ungroup": {
+      const ids = store.selected().filter(id => { const e = store.getElement(id); return e && e.type === "group"; });
+      if (!ids.length) { toast("请先选中一个编组（▣）", false); break; }
+      ids.forEach(id => store.ungroupElement(id));
+      toast("已取消编组（子级已提升，未删除）");
+      break;
+    }
+    case "indent": {
+      const id = store.state.selectedId;
+      if (!id) { toast("请先选中元素", false); break; }
+      if (!store.indentElement(id)) toast("找不到可作为父级的容器", false);
+      break;
+    }
+    case "outdent": {
+      const id = store.state.selectedId;
+      if (!id) { toast("请先选中元素", false); break; }
+      if (!store.outdentElement(id)) toast("已在顶层", false);
+      break;
+    }
     case "copy": copySelected(); break;
     case "paste": paste(); break;
     case "delete": deleteSelected(); break;
@@ -3274,6 +3618,16 @@ function showContextMenu(x, y) {
   add("🗑", "删除", "Del", !hasSel, deleteSelected);
   add("⇞", "置顶", "", !hasSel, () => store.moveZ(sel, "front"));
   add("⇟", "置底", "", !hasSel, () => store.moveZ(sel, "back"));
+  sep();
+  const selCount = store.selected().length;
+  add("▣", "编组", "", selCount < 2, () => {
+    if (store.groupElements(store.selected())) toast("已编组（只新增一层，保留内部嵌套）");
+    else toast("请至少选中 2 个元素", false);
+  });
+  add("▢", "取消编组", "", !hasSel || (store.getElement(sel) || {}).type !== "group", () => {
+    store.ungroupElement(sel);
+    toast("已取消编组（子级已提升，未删除）");
+  });
 
   menu.style.visibility = "hidden";
   document.body.appendChild(menu);

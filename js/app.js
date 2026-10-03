@@ -155,8 +155,20 @@ function toggleLock() {
   if (!ids.length) { toast("请先选中一个元素", false); return; }
   const allLocked = ids.every(id => store.getElement(id).locked);
   const target = !allLocked;
-  store.updateMany(ids, { locked: target });
-  toast(target ? "已锁定所选元素" : "已解锁所选元素");
+  const all = new Set();
+  ids.forEach(id => { all.add(id); store._descendants(id).forEach(d => all.add(d)); });
+  store.updateMany([...all], { locked: target });
+  toast(target ? "已锁定所选（含子级）" : "已解锁所选（含子级）");
+}
+// top-most selected elements: those whose ancestor is not also selected
+function selectionRoots() {
+  const ids = store.selected();
+  const set = new Set(ids);
+  return ids.filter(id => {
+    let p = (store.getElement(id) || {}).parentId;
+    while (p) { if (set.has(p)) return false; p = (store.getElement(p) || {}).parentId; }
+    return true;
+  });
 }
 function toggleHide() {
   const ids = store.selected();
@@ -316,7 +328,7 @@ function onRibbonTool(tool) {
     // layout
     case "align-left": case "align-center-x": case "align-right":
     case "align-top": case "align-center-y": case "align-bottom": {
-      const ids = store.selected(); if (!ids.length) { toast("请先选中元素", false); break; }
+      const ids = selectionRoots(); if (!ids.length) { toast("请先选中元素", false); break; }
       const which = tool.id.replace("align-", "");
       ids.forEach(x => store.alignElement(x, which));
       break;
@@ -329,6 +341,32 @@ function onRibbonTool(tool) {
     }
     case "lock": toggleLock(); break;
     case "hide": toggleHide(); break;
+    case "group": {
+      const ids = store.selected();
+      if (store.selected().length < 2) { toast("请至少选中 2 个元素", false); break; }
+      if (store.groupElements(ids)) toast("已编组（只新增一层，保留内部嵌套）");
+      else toast("请至少选中 2 个元素", false);
+      break;
+    }
+    case "ungroup": {
+      const ids = store.selected().filter(id => { const e = store.getElement(id); return e && e.type === "group"; });
+      if (!ids.length) { toast("请先选中一个编组（▣）", false); break; }
+      ids.forEach(id => store.ungroupElement(id));
+      toast("已取消编组（子级已提升，未删除）");
+      break;
+    }
+    case "indent": {
+      const id = store.state.selectedId;
+      if (!id) { toast("请先选中元素", false); break; }
+      if (!store.indentElement(id)) toast("找不到可作为父级的容器", false);
+      break;
+    }
+    case "outdent": {
+      const id = store.state.selectedId;
+      if (!id) { toast("请先选中元素", false); break; }
+      if (!store.outdentElement(id)) toast("已在顶层", false);
+      break;
+    }
     case "copy": copySelected(); break;
     case "paste": paste(); break;
     case "delete": deleteSelected(); break;
@@ -373,6 +411,16 @@ function showContextMenu(x, y) {
   add("🗑", "删除", "Del", !hasSel, deleteSelected);
   add("⇞", "置顶", "", !hasSel, () => store.moveZ(sel, "front"));
   add("⇟", "置底", "", !hasSel, () => store.moveZ(sel, "back"));
+  sep();
+  const selCount = store.selected().length;
+  add("▣", "编组", "", selCount < 2, () => {
+    if (store.groupElements(store.selected())) toast("已编组（只新增一层，保留内部嵌套）");
+    else toast("请至少选中 2 个元素", false);
+  });
+  add("▢", "取消编组", "", !hasSel || (store.getElement(sel) || {}).type !== "group", () => {
+    store.ungroupElement(sel);
+    toast("已取消编组（子级已提升，未删除）");
+  });
 
   menu.style.visibility = "hidden";
   document.body.appendChild(menu);

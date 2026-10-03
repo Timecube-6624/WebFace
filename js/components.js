@@ -65,6 +65,20 @@ export const COMPONENTS = {
       "align-items": "flex-start", "justify-content": "flex-start", "gap": "8px",
     },
   },
+  group: {
+    key: "group", label: "编组", icon: "▣", tag: "div", isContainer: true,
+    size: { width: 300, height: 200 },
+    content: "",
+    props: {
+      "font-size": "14px", "font-weight": 400, "color": "#111827",
+      "line-height": 1.5, "text-align": "left", "font-family": "inherit",
+      "margin": "0px", "padding": "0px", "background-color": "transparent",
+      "border-width": "0px", "border-style": "none", "border-color": "transparent",
+      "border-radius": "0px", "box-shadow": "none", "opacity": 1,
+      "display": "block", "width": "100%", "height": "100%",
+      "align-items": "flex-start", "justify-content": "flex-start", "gap": "0px",
+    },
+  },
   container: {
     key: "container", label: "容器", icon: "⊡", tag: "div", isContainer: true,
     size: { width: 420, height: 260 },

@@ -175,6 +175,7 @@ export class Canvas {
     }
     node.className = "el";
     if (el.locked) node.classList.add("locked");
+    if (el.type === "group") node.classList.add("is-group-el");
     if (store.isSelected(el.id)) node.classList.add("selected");
     node.dataset.id = el.id;
     return node;
@@ -285,12 +286,15 @@ export class Canvas {
 
   _startMove(ev, ids) {
     const start = this._clientToCanvas(ev);
-    const idSet = new Set();
-    for (const id of ids) {
-      idSet.add(id);
-      store._descendants(id).forEach(d => idSet.add(d));
-    }
-    const group = [...idSet].map(id => {
+    // Move only the "roots" of the selection; the store translates descendants
+    // automatically so children follow their parent without double-moving.
+    const idSet = new Set(ids);
+    const roots = ids.filter(id => {
+      let p = (store.getElement(id) || {}).parentId;
+      while (p) { if (idSet.has(p)) return false; p = (store.getElement(p) || {}).parentId; }
+      return !!store.getElement(id);
+    });
+    const group = roots.map(id => {
       const e = store.getElement(id);
       return e ? { id, x: e.x, y: e.y } : null;
     }).filter(Boolean);
@@ -362,11 +366,10 @@ export class Canvas {
       nx = clamp(this._snap(nx), 0, store.state.width - 1);
       ny = clamp(this._snap(ny), 0, store.state.height - 1);
       const dx = nx - sx, dy = ny - sy;
-      const single = d.group.length === 1;
       for (const g of d.group) {
-        const patch = { x: g.x + dx, y: g.y + dy };
-        if (single) { const pid = this._hitTestParent(g.id, patch.x, patch.y); if (pid) patch.parentId = pid; }
-        store.updateElement(g.id, patch, { history: false });
+        // No automatic re-parenting: moving an element never changes its
+        // hierarchy. Grouping/nesting is manual (编组 button or layer drag).
+        store.updateElement(g.id, { x: g.x + dx, y: g.y + dy }, { history: false });
       }
     } else if (d.mode === "marquee") {
       this._drawMarquee(cur);
@@ -440,9 +443,8 @@ export class Canvas {
     const c = getComponent(typeKey);
     const x = Math.max(0, canvasPos.x - (c.size ? c.size.width : 0) / 2);
     const y = Math.max(0, canvasPos.y - (c.size ? c.size.height : 0) / 2);
+    // Inserted at the top level; nesting into a container is a manual action.
     const el = store.addElement(typeKey, { x, y });
-    const parentId = this._hitTestParent(el.id, el.x, el.y);
-    if (parentId) store.updateElement(el.id, { parentId }, { history: false });
     store.select(el.id);
     return el;
   }
