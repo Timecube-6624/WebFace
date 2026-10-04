@@ -34,6 +34,7 @@ export class Store extends Emitter {
     return {
       id: uid("proj"),
       name: "未命名项目",
+      author: "",
       width: 1200,
       height: 800,
       zoom: 1,
@@ -294,6 +295,10 @@ export class Store extends Emitter {
   }
   setProjectName(name) {
     this.project.name = name;
+    this._emit({ type: "meta" });
+  }
+  setAuthor(author) {
+    this.project.author = author || "";
     this._emit({ type: "meta" });
   }
 
@@ -567,7 +572,7 @@ export class Store extends Emitter {
     return {
       version: 1,
       project: {
-        id: p.id, name: p.name, width: p.width, height: p.height, zoom: p.zoom,
+        id: p.id, name: p.name, author: p.author || "", width: p.width, height: p.height, zoom: p.zoom,
         canvasBg: p.canvasBg, showGrid: p.showGrid,
         logic: p.logic || [],
         elements: p.elements,
@@ -592,6 +597,7 @@ export class Store extends Emitter {
     this.project = {
       id: p.id || uid("proj"),
       name: p.name || "未命名项目",
+      author: p.author || "",
       width: p.width || 1200,
       height: p.height || 800,
       zoom: p.zoom || 1,

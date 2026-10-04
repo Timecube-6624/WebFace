@@ -25,6 +25,7 @@ const refs = {
   modalNew: $("#start-panel"),
   newName: $("#new-name"), newWidth: $("#new-width"), newHeight: $("#new-height"),
   newFolder: $("#new-folder"), newFolderPick: $("#new-folder-pick"), newFolderClear: $("#new-folder-clear"),
+  projectAuthor: $("#project-author"),
   newCancel: $("#new-cancel"), newCreate: $("#new-create"), newDemo: $("#new-demo"),
   exportTarget: $("#export-target"),
   toast: $("#toast"),
@@ -80,6 +81,7 @@ function ensureInit() {
 }
 
 const needCreate = ensureInit();
+initAuthor();
 canvas.layout();
 canvas.requestFocus();
 setHeaderHeight();
@@ -194,13 +196,26 @@ function fitToView() {
   }
 }
 
-// ---------- project name / save ----------
+// ---------- project name / author / save ----------
 refs.projectName.addEventListener("change", () => {
   const v = refs.projectName.value.trim() || "未命名项目";
   store.setProjectName(v);
   $("title").textContent = v + " · WebFacer";
 });
 function focusName() { refs.projectName.focus(); refs.projectName.select(); }
+// author — goes into webfacer.json inside the exported archive
+function setAuthor(v, remember = true) {
+  const a = String(v || "").trim();
+  store.setAuthor(a);
+  refs.projectAuthor.value = a;
+  if (remember) { try { localStorage.setItem("wf.author", a); } catch (e) {} }
+}
+function initAuthor() {
+  let remembered = "";
+  try { remembered = localStorage.getItem("wf.author") || ""; } catch (e) {}
+  refs.projectAuthor.value = store.state.author || remembered;
+}
+refs.projectAuthor.addEventListener("change", () => setAuthor(refs.projectAuthor.value));
 refs.btnSave.addEventListener("click", doSave);
 function doSave() {
   const ok = store.saveLocal();
@@ -233,7 +248,7 @@ function refreshExportUI() {
   } else {
     t.hidden = true;
     t.textContent = "";
-    t.title = "尚未选择导出文件夹（「交付」→ 导出到文件夹 或 下载）";
+    t.title = "尚未选择导出文件夹（「导出 ▾」会直接下载 zip 存档）";
   }
   refs.newFolder.value = name || "";
   refs.newFolderClear.hidden = !name;
@@ -269,6 +284,7 @@ function createProject() {
     const height = clamp(parseInt(refs.newHeight.value, 10) || 800, 200, 8000);
     store.newProject({ name, width, height });
     refs.projectName.value = name;
+    initAuthor();                 // a new project starts with the remembered author
     $("title").textContent = name + " · WebFacer";
     refs.modalNew.hidden = true;
     canvas.layout();
@@ -378,8 +394,7 @@ function onRibbonTool(tool) {
     case "code": codePreview.toggle(); break;
     case "copy-css": copyCode("css"); break;
     case "copy-html": copyCode("html"); break;
-    case "export": exporter.exportToFolder(true); break;
-    case "download": exporter.downloadFiles(); break;
+    case "export": exporter.exportArchive(); break;
     default: break;
   }
 }

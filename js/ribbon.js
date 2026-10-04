@@ -100,9 +100,8 @@ export const MODES = [
         { id: "copy-css", label: "复制 CSS", icon: "{}" },
         { id: "copy-html", label: "复制 HTML", icon: "<>" },
       ]},
-      { label: "导出", tools: [
-        { id: "export", label: "导出到文件夹", icon: "📁" },
-        { id: "download", label: "下载文件", icon: "⬇" },
+      { label: "归档", tools: [
+        { id: "export", label: "导出 zip 存档", icon: "📦" },
         { id: "save", label: "保存", icon: "▤" },
       ]},
     ],

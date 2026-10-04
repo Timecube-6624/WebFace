@@ -117,6 +117,7 @@ button { font-family: var(--font); }
 }
 .appbar-name:hover { border-color: var(--md-outline-variant); }
 .appbar-name:focus { border-color: var(--md-primary); background: var(--md-surface-container); }
+.appbar-author { width: 118px; font-size: 12px; color: var(--md-on-surface-variant); }
 
 .appbar-zoom { display: flex; align-items: center; gap: 2px; background: var(--md-surface-container); border-radius: var(--radius-pill); padding: 2px; }
 .appbar-zoom .btn-icon { height: 30px; width: 30px; }

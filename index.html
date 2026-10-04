@@ -17,6 +17,7 @@
           <span class="brand-name">WebFacer</span>
         </div>
         <input type="text" id="project-name" class="appbar-name" spellcheck="false" placeholder="未命名项目" title="项目名称">
+        <input type="text" id="project-author" class="appbar-name appbar-author" spellcheck="false" placeholder="作者" title="作者（写进导出 zip 里的 webfacer.json）">
         <div class="appbar-spacer"></div>
         <div class="appbar-zoom">
           <button class="btn btn-icon" id="zoom-out" title="缩小">−</button>
@@ -26,7 +27,7 @@
         <button class="btn" id="btn-code" title="源码预览">代码</button>
         <button class="btn" id="btn-save" title="保存到浏览器本地">保存</button>
         <span id="export-target" class="export-target" hidden title="导出的目标文件夹"></span>
-        <button class="btn btn-primary" id="btn-export" title="导出到所选文件夹">导出 ▾</button>
+        <button class="btn btn-primary" id="btn-export" title="导出 zip 存档（index.html + style.css + webfacer.json，不压缩）">导出 ▾</button>
       </header>
       <nav class="modes" id="modes" role="tablist" aria-label="工作模式"></nav>
       <div class="ribbon" id="ribbon"></div>

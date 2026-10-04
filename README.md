@@ -43,7 +43,7 @@ npm run build        # 等价于 node build.mjs ，生成 js/bundle.js
    - 容器布局（Flex 方向 / 对齐 / 间距，容器类元素适用）
 4. **图层**：左侧「图层」标签可查看元素树、点选、显示/隐藏。把元素拖进「卡片/容器」内会自动成为其子元素（导出时嵌套进该容器）。
 5. **预览源码**：点顶栏「代码」，可切换查看：当前元素 CSS、整页 CSS、导出的 HTML。
-6. **导出**：点顶栏「导出」下拉，选择「导出到所选文件夹」会把 `index.html` 与 `style.css` 写入该目录；或选「下载」单独下载文件。
+6. **导出**：点顶栏「导出 ▾」→「导出 zip 存档」，会把 `index.html`、`style.css` 和记录 WebFacer 数据的 `webfacer.json` 打成一个**不压缩**（zip store 方式）的归档 `项目名.zip`：已选择导出文件夹时写入该文件夹，否则直接下载。`webfacer.json` 里含项目名称、作者、画布尺寸、元素/动画/点击逻辑等完整数据。
 
 ## 快捷键
 
@@ -78,4 +78,5 @@ serve.mjs             本地静态服务器（node serve.mjs . 4173）
 ## 说明
 
 - 导出时按「画布绝对坐标」生成样式，尽可能还原 WYSIWYG 效果；子元素在导出中嵌套到其父容器内并相对定位。
-- 导出文件夹选择使用浏览器原生 `showDirectoryPicker`，目前 Chrome / Edge 支持；不支持时自动改用「下载」方式。
+- 导出文件夹选择使用浏览器原生 `showDirectoryPicker`，目前 Chrome / Edge 支持；不支持时（例如 `file://` 直接打开）自动改为「下载」zip。
+- 归档用 zip 的 **store（不压缩）** 方式写入，`index.html` / `style.css` / `webfacer.json` 在压缩包里是原样字节；只需解压即可查看。
